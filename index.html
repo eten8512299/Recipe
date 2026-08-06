@@ -892,7 +892,7 @@
       const b = iMat2 === -1 ? "" : (r[iMat2] || "").trim();
       const result = (r[iRes] || "").trim();
       if (!a || !result) continue;
-      const mats = b ? [a, b] : [a]; // mat2 是空的就當作萃取（單一材料）
+      const mats = b ? [a, b] : [a]; // mat2 是空的就當作萃取（單一材料）。
       out.push({ mats, result });
     }
     return out;
