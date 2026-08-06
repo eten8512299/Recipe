@@ -1,0 +1,1555 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>煉金圖書館 · 合成路徑查詢</title>
+<style>
+  :root {
+    --bg: #14111a;
+    --bg-soft: #1c1722;
+    --panel: #221b29;
+    --panel-border: #362b40;
+    --text: #ede4e9;
+    --text-dim: #c3b3c5;
+    --gold: #d9a441;
+    --gold-soft: rgba(217, 164, 65, 0.15);
+    --fire: #e0562f;
+    --water: #3a8fd9;
+    --earth: #a97c50;
+    --thunder: #8b6bff;
+    --wind: #3fae7a;
+    --danger: #d9544f;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: radial-gradient(ellipse at top, #241c2c 0%, var(--bg) 55%);
+    color: var(--text);
+    font-family: "Noto Serif TC", "Songti TC", "PMingLiU", serif;
+    font-size: 16px;
+    min-height: 100vh;
+  }
+
+  .mono {
+    font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+
+  .wrap {
+    max-width: 1520px;
+    margin: 0 auto;
+    padding: 40px 24px 60px;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+
+  header .eyebrow {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    letter-spacing: 0.25em;
+    color: var(--gold);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  header h1 {
+    font-size: 32px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    letter-spacing: 0.02em;
+  }
+
+  header p {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin: 0;
+  }
+
+  .elements-row {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 22px;
+    flex-wrap: wrap;
+  }
+
+  .element-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--panel-border);
+    background: var(--panel);
+    font-size: 15px;
+    font-family: ui-monospace, monospace;
+  }
+
+  .element-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  .element-chip.cheat-chip {
+    border-color: var(--thunder);
+    color: var(--thunder);
+  }
+
+  .cheat-toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 18px;
+    cursor: pointer;
+    max-width: 560px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .cheat-toggle-label {
+    font-size: 13px;
+    color: var(--text-dim);
+    font-family: ui-monospace, monospace;
+    line-height: 1.5;
+    text-align: left;
+  }
+
+  .toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+  }
+  .toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--panel-border);
+    border-radius: 999px;
+    transition: background 0.2s;
+  }
+  .toggle-slider::before {
+    content: "";
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    left: 3px;
+    top: 3px;
+    background: var(--text);
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .toggle-switch input:checked + .toggle-slider {
+    background: var(--thunder);
+  }
+  .toggle-switch input:checked + .toggle-slider::before {
+    transform: translateX(18px);
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 14px;
+    padding: 22px;
+    margin-bottom: 20px;
+  }
+
+  .panel h2 {
+    font-size: 15px;
+    font-family: ui-monospace, monospace;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin: 0 0 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .drop-zone {
+    border: 1.5px dashed var(--panel-border);
+    border-radius: 10px;
+    padding: 22px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    color: var(--text-dim);
+    font-size: 16px;
+  }
+  .drop-zone:hover, .drop-zone.drag {
+    border-color: var(--gold);
+    background: var(--gold-soft);
+    color: var(--text);
+  }
+  .drop-zone input { display: none; }
+
+  .status-line {
+    margin-top: 12px;
+    font-size: 15px;
+    color: var(--text-dim);
+    font-family: ui-monospace, monospace;
+  }
+  .status-line.ok { color: var(--wind); }
+  .status-line.err { color: var(--danger); }
+
+  details.advanced { margin-top: 14px; }
+  details.advanced summary {
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text-dim);
+    font-family: ui-monospace, monospace;
+  }
+  details.advanced textarea {
+    width: 100%;
+    margin-top: 10px;
+    min-height: 90px;
+    background: var(--bg-soft);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 10px;
+    font-family: ui-monospace, monospace;
+    font-size: 14px;
+    resize: vertical;
+  }
+  details.advanced button {
+    margin-top: 8px;
+  }
+  .base-edit {
+    width: 100%;
+    margin-top: 8px;
+    background: var(--bg-soft);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 8px 10px;
+    font-family: ui-monospace, monospace;
+    font-size: 15px;
+  }
+  .base-edit::placeholder { color: var(--text-dim); opacity: 1; }
+  details.advanced textarea::placeholder { color: var(--text-dim); opacity: 1; }
+
+  .browse-list {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .browse-group {
+    margin-bottom: 14px;
+  }
+  .browse-group:last-child { margin-bottom: 0; }
+  .browse-group-title {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--gold);
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .browse-group-title::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--panel-border);
+  }
+  .browse-bubbles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+  .browse-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-soft);
+    border: 1px solid var(--panel-border);
+    border-radius: 999px;
+    padding: 6px 8px 6px 14px;
+    cursor: pointer;
+    font-size: 15px;
+    transition: border-color 0.15s, background 0.15s, transform 0.1s;
+  }
+  .browse-pill:hover {
+    border-color: var(--gold);
+    background: var(--gold-soft);
+    transform: translateY(-1px);
+  }
+  .browse-pill .steps-badge {
+    background: var(--gold);
+    color: #241a0c;
+    font-weight: 700;
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+    border-radius: 999px;
+    padding: 2px 8px;
+  }
+  .browse-empty {
+    padding: 18px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 15px;
+  }
+
+  .search-row {
+    display: flex;
+    gap: 10px;
+  }
+
+  .search-row input[type="text"] {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg-soft);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 16px;
+    color: var(--text);
+    font-family: "Noto Serif TC", serif;
+  }
+  .search-row input[type="text"]:focus {
+    outline: none;
+    border-color: var(--gold);
+  }
+  .search-row input[type="text"]::placeholder {
+    color: var(--text-dim);
+    opacity: 1;
+  }
+
+  @media (max-width: 480px) {
+    .search-row {
+      flex-direction: column;
+    }
+    .search-row button {
+      padding: 14px;
+    }
+  }
+
+  button {
+    background: var(--gold);
+    color: #241a0c;
+    border: none;
+    border-radius: 10px;
+    padding: 0 22px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: ui-monospace, monospace;
+    transition: filter 0.15s, transform 0.1s;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: scale(0.98); }
+  button:disabled {
+    background: var(--panel-border);
+    color: var(--text-dim);
+    cursor: not-allowed;
+  }
+  button.secondary {
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--text-dim);
+  }
+
+  .result-summary {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 18px 0 12px;
+    font-family: ui-monospace, monospace;
+  }
+  .result-summary .steps {
+    font-size: 28px;
+    color: var(--gold);
+    font-weight: 700;
+  }
+  .result-summary .label {
+    color: var(--text-dim);
+    font-size: 15px;
+  }
+
+  .owned-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-dim);
+    font-family: ui-monospace, monospace;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .owned-bar .owned-count {
+    color: var(--wind);
+    font-weight: 700;
+  }
+  .owned-bar button {
+    padding: 3px 12px;
+    font-size: 12px;
+  }
+
+  .ownable-name {
+    cursor: pointer;
+    border-bottom: 1px dashed var(--text-dim);
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .ownable-name:hover {
+    color: var(--gold);
+    border-color: var(--gold);
+  }
+
+  .chain {
+    position: relative;
+    padding-left: 26px;
+  }
+  .chain::before {
+    content: "";
+    position: absolute;
+    left: 9px;
+    top: 6px;
+    bottom: 6px;
+    width: 1.5px;
+    background: linear-gradient(to bottom, var(--gold), transparent 96%);
+    opacity: 0.5;
+  }
+
+  .step {
+    position: relative;
+    padding: 12px 0 12px 20px;
+  }
+  .step::before {
+    content: "";
+    position: absolute;
+    left: -21px;
+    top: 18px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--gold);
+    box-shadow: 0 0 0 3px var(--bg), 0 0 8px var(--gold);
+  }
+  .step .idx {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+  .step .formula {
+    font-size: 17px;
+  }
+  .step .formula .op {
+    color: var(--text-dim);
+    margin: 0 8px;
+    font-family: ui-monospace, monospace;
+  }
+  .step .formula .arrow { color: var(--gold); }
+  .step .formula .result { color: var(--gold); font-weight: 600; }
+  .step .formula .base-tag {
+    font-size: 10px;
+    vertical-align: middle;
+    color: var(--bg);
+    background: var(--wind);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 6px;
+    font-family: ui-monospace, monospace;
+  }
+
+  .empty-msg, .error-msg {
+    text-align: center;
+    color: var(--text-dim);
+    padding: 24px 10px;
+    font-size: 16px;
+    line-height: 1.7;
+  }
+  .error-msg { color: var(--danger); }
+
+  .stats-line {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 26px;
+  }
+
+  /* ---- 三區塊版面 ---- */
+  .layout {
+    display: grid;
+    grid-template-columns: 480px minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+  }
+  .col-left {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .col-right {
+    position: sticky;
+    top: 20px;
+  }
+  @media (max-width: 880px) {
+    .layout { grid-template-columns: 1fr; }
+    .col-right { position: static; }
+  }
+
+  .panel-browse {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 320px;
+  }
+  .panel-browse .browse-list {
+    flex: 1;
+    max-height: 62vh;
+  }
+
+  .panel-result {
+    min-height: 400px;
+  }
+
+  .section-divider {
+    border: none;
+    border-top: 1px solid var(--panel-border);
+    margin: 18px 0;
+  }
+
+  .hint-label {
+    font-size: 14px;
+    color: var(--text-dim);
+    font-family: ui-monospace, monospace;
+    margin-bottom: 8px;
+  }
+
+  .forward-result {
+    margin-top: 10px;
+    font-size: 16px;
+  }
+  .forward-result .fr-empty {
+    color: var(--text-dim);
+    font-family: ui-monospace, monospace;
+    font-size: 14px;
+  }
+  .forward-result .fr-label {
+    color: var(--text-dim);
+    font-family: ui-monospace, monospace;
+    font-size: 12.5px;
+    margin-bottom: 6px;
+  }
+  .fr-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--bg-soft);
+    border: 1px solid var(--panel-border);
+    border-radius: 999px;
+    padding: 5px 12px;
+    margin: 0 6px 6px 0;
+    cursor: pointer;
+    font-size: 15px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .fr-pill:hover {
+    border-color: var(--gold);
+    background: var(--gold-soft);
+  }
+  .fr-pill .fr-arrow {
+    color: var(--gold);
+    font-size: 11px;
+  }
+
+  /* ---- 樹狀合成路線 ---- */
+  .view-toggle {
+    display: inline-flex;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .view-toggle button {
+    background: transparent;
+    color: var(--text-dim);
+    border: none;
+    border-radius: 0;
+    padding: 5px 14px;
+    font-size: 12px;
+  }
+  .view-toggle button.active {
+    background: var(--gold);
+    color: #241a0c;
+  }
+
+  .tree-root { padding: 4px 0; }
+  .tree-node { position: relative; }
+  .tree-node-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+  }
+  .tree-node-row .kind-badge {
+    font-size: 9.5px;
+    font-family: ui-monospace, monospace;
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--bg);
+    flex-shrink: 0;
+  }
+  .tree-node-row .kind-badge.extract { background: var(--water); }
+  .tree-node-row .kind-badge.combine { background: var(--fire); }
+  .tree-node-row .kind-badge.reuse {
+    background: transparent;
+    border: 1px solid var(--text-dim);
+    color: var(--text-dim);
+  }
+  .tree-node-row .name {
+    font-size: 15px;
+  }
+  .tree-node-row .name.leaf-base {
+    color: var(--wind);
+    font-family: ui-monospace, monospace;
+    font-size: 15px;
+  }
+  .tree-node-row .name.leaf-unknown {
+    color: var(--thunder);
+    font-family: ui-monospace, monospace;
+    font-size: 15px;
+  }
+  .tree-children {
+    margin-left: 18px;
+    padding-left: 16px;
+    border-left: 1.5px dashed var(--panel-border);
+  }
+  .tree-truncate {
+    color: var(--text-dim);
+    font-size: 12px;
+    font-family: ui-monospace, monospace;
+    padding: 4px 0;
+  }
+
+  datalist { }
+
+  footer {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-top: 40px;
+    font-family: ui-monospace, monospace;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="eyebrow">Infinite Alchemy · Path Finder</div>
+      <h1>合成路徑查詢</h1>
+      <p>從五種基本元素出發，找出抵達目標造物的最短合成路徑</p>
+      <div class="elements-row" id="element-chips"></div>
+
+      <label class="cheat-toggle-row" for="cheat-mode-toggle">
+        <span class="toggle-switch">
+          <input type="checkbox" id="cheat-mode-toggle" />
+          <span class="toggle-slider"></span>
+        </span>
+        <span class="cheat-toggle-label">
+          偷吃步模式：把「去尾／去首字／取首字／取尾字／去除前綴／去除後綴」也當作基本元素
+        </span>
+      </label>
+    </header>
+
+    <div class="layout">
+      <div class="col-left">
+        <div class="panel">
+          <h2>① 載入資料 &amp; 查詢</h2>
+          <label class="drop-zone" id="drop-zone">
+            <input type="file" id="file-input" accept=".json,.csv" />
+            <span id="drop-label">點此選擇 recipes.json 或 recipes.csv，或直接拖曳檔案到這裡</span>
+          </label>
+          <div class="status-line" id="load-status">尚未載入資料</div>
+
+          <details class="advanced">
+            <summary>改用貼上 JSON 內容 / 調整基本元素</summary>
+            <textarea id="paste-area" placeholder='貼上 JSON 陣列內容，例如 [{"materials":["火","水"],"result":"蒸氣"}, ...]'></textarea>
+            <button class="secondary" id="parse-paste-btn" type="button">解析貼上的內容</button>
+            <div style="margin-top:14px;">
+              <label style="font-size:12.5px;color:var(--text-dim);font-family:ui-monospace,monospace;">
+                基本元素（逗號分隔，需與資料中的名稱完全一致）
+              </label>
+              <input class="base-edit" id="base-elements-input" value="火,水,土,雷,風" />
+            </div>
+          </details>
+
+          <hr class="section-divider" />
+
+          <div class="search-row">
+            <input type="text" id="search-input" list="item-list" placeholder="輸入造物名稱，例如：升級" disabled />
+            <datalist id="item-list"></datalist>
+            <button id="search-btn" type="button" disabled>查詢</button>
+          </div>
+
+          <hr class="section-divider" />
+
+          <div>
+            <div class="hint-label">正向查詢：輸入材料看看能合成 / 萃取出什麼</div>
+            <div class="search-row" style="margin-bottom:8px;">
+              <input type="text" id="forward-mat1" list="item-list" placeholder="材料 A" disabled />
+              <input type="text" id="forward-mat2" list="item-list" placeholder="材料 B（留空＝查萃取）" disabled />
+            </div>
+            <button id="forward-btn" type="button" disabled style="width:100%;">查詢</button>
+            <div id="forward-result" class="forward-result"></div>
+          </div>
+        </div>
+
+        <div class="panel panel-browse">
+          <h2>
+            ② 瀏覽已知路徑清單
+            <span id="browse-count" style="font-weight:normal;font-size:11px;color:var(--text-dim);"></span>
+          </h2>
+          <input
+            type="text"
+            id="browse-filter"
+            class="base-edit"
+            placeholder="篩選造物名稱…"
+            style="margin-bottom:12px;"
+            disabled
+          />
+          <div id="browse-list" class="browse-list"></div>
+        </div>
+      </div>
+
+      <div class="col-right">
+        <div class="panel panel-result" id="result-panel">
+          <h2>
+            ③ 合成路線
+            <button type="button" id="download-btn" class="secondary" style="display:none;">下載純文字</button>
+          </h2>
+          <div id="result-body">
+            <div class="empty-msg">載入資料後，在左側輸入造物名稱查詢，結果會顯示在這裡</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats-line" id="stats-line"></div>
+    <footer>資料只會在你的瀏覽器裡處理，不會上傳到任何地方</footer>
+  </div>
+
+
+<script>
+(function () {
+  const ELEMENT_COLORS = {
+    "火": "var(--fire)",
+    "水": "var(--water)",
+    "土": "var(--earth)",
+    "雷": "var(--thunder)",
+    "風": "var(--wind)",
+  };
+
+  let BASE_ELEMENTS = ["火", "水", "土", "雷", "風"];
+  const CHEAT_TOOLS = ["去尾", "去首字", "取首字", "取尾字", "去除前綴", "去除後綴"];
+  let cheatMode = false;
+  let recipes = [];       // [{a,b,result}]
+  let itemIndex = null;   // ingredient name -> [recipe,...]
+  let resultItems = null; // Set: 曾經是某配方結果的造物
+  let forwardIndex = null; // "matA|matB" 或 "matA" -> Set(result)：正向查詢用
+  let solveBase = null;   // {cost, choice}  完全回溯到 5 元素（或加上偷吃步工具）
+  let solveAny = null;    // {cost, choice}  允許用「未知配方材料」當起點
+  let allItems = [];      // for datalist
+
+  function currentBaseLeafSet() {
+    return cheatMode ? BASE_ELEMENTS.concat(CHEAT_TOOLS) : BASE_ELEMENTS.slice();
+  }
+
+  const dropZone = document.getElementById("drop-zone");
+  const fileInput = document.getElementById("file-input");
+  const dropLabel = document.getElementById("drop-label");
+  const loadStatus = document.getElementById("load-status");
+  const pasteArea = document.getElementById("paste-area");
+  const parsePasteBtn = document.getElementById("parse-paste-btn");
+  const baseElementsInput = document.getElementById("base-elements-input");
+  const searchInput = document.getElementById("search-input");
+  const DATALIST_LIMIT = 50;
+
+  function updateDatalist(query) {
+    const q = query.trim();
+    const out = [];
+    for (let i = 0; i < allItems.length && out.length < DATALIST_LIMIT; i++) {
+      if (!q || allItems[i].includes(q)) out.push(allItems[i]);
+    }
+    itemList.innerHTML = out.map((n) => `<option value="${escapeHtml(n)}">`).join("");
+  }
+
+  let datalistDebounce = null;
+  searchInput.addEventListener("input", () => {
+    clearTimeout(datalistDebounce);
+    datalistDebounce = setTimeout(() => updateDatalist(searchInput.value), 120);
+  });
+  const searchBtn = document.getElementById("search-btn");
+  const itemList = document.getElementById("item-list");
+  const resultPanel = document.getElementById("result-panel");
+  const resultBody = document.getElementById("result-body");
+  const downloadBtn = document.getElementById("download-btn");
+  const statsLine = document.getElementById("stats-line");
+  const elementChips = document.getElementById("element-chips");
+  const forwardMat1 = document.getElementById("forward-mat1");
+  const forwardMat2 = document.getElementById("forward-mat2");
+  const forwardBtn = document.getElementById("forward-btn");
+  const forwardResult = document.getElementById("forward-result");
+  const browseFilter = document.getElementById("browse-filter");
+  const browseList = document.getElementById("browse-list");
+  const browseCount = document.getElementById("browse-count");
+
+  function renderElementChips() {
+    let html = BASE_ELEMENTS.map((el) => {
+      const color = ELEMENT_COLORS[el] || "var(--gold)";
+      return `<span class="element-chip"><span class="element-dot" style="background:${color}"></span>${el}</span>`;
+    }).join("");
+    if (cheatMode) {
+      html += CHEAT_TOOLS.map(
+        (t) => `<span class="element-chip cheat-chip">${escapeHtml(t)}</span>`
+      ).join("");
+    }
+    elementChips.innerHTML = html;
+  }
+  renderElementChips();
+
+  // ---------- 資料正規化 ----------
+  function normalizeName(v) {
+    if (v == null) return "";
+    if (typeof v === "string") return v.trim();
+    if (typeof v === "object") {
+      if ("name" in v) return String(v.name).trim();
+    }
+    return String(v).trim();
+  }
+
+  function normalizeRecords(raw) {
+    if (!Array.isArray(raw)) throw new Error("JSON 內容必須是陣列");
+    const out = [];
+    for (const item of raw) {
+      if (!item || !item.materials || !item.result) continue;
+      const rawMats = item.materials;
+      if (!Array.isArray(rawMats) || rawMats.length < 1) continue;
+      const mats = rawMats.map(normalizeName).filter(Boolean).slice(0, 2);
+      const result = normalizeName(item.result);
+      if (!mats.length || !result) continue;
+      out.push({ mats, result });
+    }
+    return out;
+  }
+
+  // 簡單 CSV 解析（支援雙引號包欄位、逗號、雙引號跳脫）
+  function parseCSV(text) {
+    const rows = [];
+    let row = [];
+    let field = "";
+    let inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++; }
+          else inQuotes = false;
+        } else field += c;
+      } else {
+        if (c === '"') inQuotes = true;
+        else if (c === ",") { row.push(field); field = ""; }
+        else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+        else if (c === "\r") { /* skip */ }
+        else field += c;
+      }
+    }
+    if (field.length || row.length) { row.push(field); rows.push(row); }
+    return rows.filter((r) => r.length > 1);
+  }
+
+  function normalizeFromCSV(text) {
+    const rows = parseCSV(text.replace(/^\uFEFF/, ""));
+    if (!rows.length) return [];
+    const header = rows[0].map((h) => h.trim().toLowerCase());
+    const iMat1 = header.indexOf("mat1");
+    const iMat2 = header.indexOf("mat2");
+    const iRes = header.indexOf("result");
+    const out = [];
+    if (iMat1 === -1 || iRes === -1) return out;
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      const a = (r[iMat1] || "").trim();
+      const b = iMat2 === -1 ? "" : (r[iMat2] || "").trim();
+      const result = (r[iRes] || "").trim();
+      if (!a || !result) continue;
+      const mats = b ? [a, b] : [a]; // mat2 是空的就當作萃取（單一材料）
+      out.push({ mats, result });
+    }
+    return out;
+  }
+
+  // ---------- 載入資料 ----------
+  function loadFromText(text, filename) {
+    try {
+      console.time("[perf] parse");
+      let parsed;
+      const looksJSON = text.trim().startsWith("[") || text.trim().startsWith("{");
+      const isCSVFile = filename && filename.toLowerCase().endsWith(".csv");
+
+      if (isCSVFile && !looksJSON) {
+        parsed = normalizeFromCSV(text);
+      } else if (looksJSON) {
+        parsed = normalizeRecords(JSON.parse(text));
+      } else {
+        parsed = normalizeFromCSV(text);
+      }
+      console.timeEnd("[perf] parse");
+
+      if (!parsed.length) throw new Error("沒有解析出任何有效的配方資料");
+
+      recipes = parsed;
+      afterLoad();
+    } catch (e) {
+      loadStatus.textContent = "載入失敗：" + e.message;
+      loadStatus.className = "status-line err";
+    }
+  }
+
+  function updateLoadStatusText() {
+    loadStatus.textContent =
+      `已載入 ${recipes.length} 筆配方，索引出 ${allItems.length} 種造物，` +
+      `完全回溯到基本元素的有 ${solveBase.cost.size} 種，加上暫代起點後可達 ${solveAny.cost.size} 種` +
+      (cheatMode ? "（偷吃步模式已開啟）" : "");
+    loadStatus.className = "status-line ok";
+  }
+
+  function afterLoad() {
+    console.time("[perf] buildIndexAndSolve");
+    buildIndexAndSolve();
+    console.timeEnd("[perf] buildIndexAndSolve");
+    updateLoadStatusText();
+    searchInput.disabled = false;
+    searchBtn.disabled = false;
+    browseFilter.disabled = false;
+    forwardMat1.disabled = false;
+    forwardMat2.disabled = false;
+    forwardBtn.disabled = false;
+    console.time("[perf] datalist populate");
+    updateDatalist("");
+    console.timeEnd("[perf] datalist populate");
+    console.time("[perf] renderBrowseList");
+    browseLimit = BROWSE_PAGE_SIZE;
+    renderBrowseList();
+    console.timeEnd("[perf] renderBrowseList");
+  }
+
+  const cheatModeToggle = document.getElementById("cheat-mode-toggle");
+  cheatModeToggle.addEventListener("change", () => {
+    cheatMode = cheatModeToggle.checked;
+    renderElementChips();
+    if (!recipes.length) return; // 還沒載入資料，只是先記住這個設定
+    buildIndexAndSolve();
+    updateLoadStatusText();
+    browseLimit = BROWSE_PAGE_SIZE;
+    renderBrowseList();
+    if (lastResult) runSearch(); // 重新整理目前顯示中的查詢結果
+  });
+
+  // ---------- 瀏覽清單：列出所有完全回溯到基本元素的造物 ----------
+  let browseLimit = 300;
+  const BROWSE_PAGE_SIZE = 300;
+
+  function renderBrowseList() {
+    if (!solveBase) return;
+    const filterText = browseFilter.value.trim();
+
+    // 先用演算法內部的估計值排序、篩選、截斷到顯示上限（這個值是快速估計，
+    // 大資料量下才不會每次輸入都要重新计算整個資料集）
+    const rough = Array.from(solveBase.cost.entries())
+      .filter(([name]) => !isBase(name))
+      .filter(([name]) => !filterText || name.includes(filterText))
+      .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0], "zh-Hant"));
+
+    browseCount.textContent = `（共 ${rough.length} 項，完全回溯到基本元素）`;
+
+    if (!rough.length) {
+      browseList.innerHTML = `<div class="browse-empty">沒有符合的造物</div>`;
+      return;
+    }
+
+    const truncatedCount = Math.max(0, rough.length - browseLimit);
+    const shown = rough.slice(0, browseLimit);
+
+    // 只針對實際要顯示的這一批，算出正確的「不重複配方數」
+    // （材料不會消失，所以用真正去重過的步驟數，而不是估計值）
+    const withRealSteps = shown.map(([name]) => [name, buildStepList(name, solveBase).length]);
+    withRealSteps.sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0], "zh-Hant"));
+
+    // 依步數分組，做成一顆顆氣泡
+    const groups = new Map();
+    for (const [name, steps] of withRealSteps) {
+      if (!groups.has(steps)) groups.set(steps, []);
+      groups.get(steps).push(name);
+    }
+
+    let html = "";
+    for (const [steps, names] of groups) {
+      html += `
+        <div class="browse-group">
+          <div class="browse-group-title">${steps} 道配方 · ${names.length} 項</div>
+          <div class="browse-bubbles">
+            ${names
+              .map(
+                (name) =>
+                  `<span class="browse-pill" data-name="${escapeHtml(name)}">
+                     ${escapeHtml(name)}<span class="steps-badge">${steps}</span>
+                   </span>`
+              )
+              .join("")}
+          </div>
+        </div>
+      `;
+    }
+    if (truncatedCount > 0) {
+      html += `
+        <div class="browse-empty">
+          還有 ${truncatedCount} 項未顯示，可以輸入關鍵字縮小範圍，
+          或
+          <button type="button" id="browse-load-more" class="secondary" style="margin-top:8px;">
+            繼續載入下 ${Math.min(BROWSE_PAGE_SIZE, truncatedCount)} 項
+          </button>
+        </div>
+      `;
+    }
+    browseList.innerHTML = html;
+
+    browseList.querySelectorAll(".browse-pill").forEach((row) => {
+      row.addEventListener("click", () => {
+        searchInput.value = row.dataset.name;
+        runSearch();
+        resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+
+    const loadMoreBtn = document.getElementById("browse-load-more");
+    if (loadMoreBtn) {
+      loadMoreBtn.addEventListener("click", () => {
+        browseLimit += BROWSE_PAGE_SIZE;
+        renderBrowseList();
+      });
+    }
+  }
+
+  browseFilter.addEventListener("input", () => {
+    browseLimit = BROWSE_PAGE_SIZE; // 重新輸入關鍵字時，顯示筆數重置
+    renderBrowseList();
+  });
+
+  fileInput.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    dropLabel.textContent = "已選擇檔案：" + file.name;
+    const reader = new FileReader();
+    reader.onload = (ev) => loadFromText(ev.target.result, file.name);
+    reader.readAsText(file, "UTF-8");
+  });
+
+  ["dragover", "dragenter"].forEach((ev) =>
+    dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.add("drag"); })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.remove("drag"); })
+  );
+  dropZone.addEventListener("drop", (e) => {
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    dropLabel.textContent = "已選擇檔案：" + file.name;
+    const reader = new FileReader();
+    reader.onload = (ev) => loadFromText(ev.target.result, file.name);
+    reader.readAsText(file, "UTF-8");
+  });
+
+  parsePasteBtn.addEventListener("click", () => {
+    const text = pasteArea.value.trim();
+    if (!text) return;
+    dropLabel.textContent = "已使用貼上的內容";
+    loadFromText(text, "paste.json");
+  });
+
+  baseElementsInput.addEventListener("change", () => {
+    const vals = baseElementsInput.value.split(",").map((s) => s.trim()).filter(Boolean);
+    if (vals.length) {
+      BASE_ELEMENTS = vals;
+      renderElementChips();
+      if (recipes.length) afterLoad();
+    }
+  });
+
+  // ---------- 最小堆 ----------
+  class MinHeap {
+    constructor() { this.arr = []; }
+    push(item) {
+      const a = this.arr;
+      a.push(item);
+      let i = a.length - 1;
+      while (i > 0) {
+        const p = (i - 1) >> 1;
+        if (a[p][0] <= a[i][0]) break;
+        [a[p], a[i]] = [a[i], a[p]];
+        i = p;
+      }
+    }
+    pop() {
+      const a = this.arr;
+      if (!a.length) return null;
+      const top = a[0];
+      const last = a.pop();
+      if (a.length) {
+        a[0] = last;
+        let i = 0;
+        while (true) {
+          const l = i * 2 + 1, r = i * 2 + 2;
+          let smallest = i;
+          if (l < a.length && a[l][0] < a[smallest][0]) smallest = l;
+          if (r < a.length && a[r][0] < a[smallest][0]) smallest = r;
+          if (smallest === i) break;
+          [a[i], a[smallest]] = [a[smallest], a[i]];
+          i = smallest;
+        }
+      }
+      return top;
+    }
+    get size() { return this.arr.length; }
+  }
+
+  // ---------- 建立索引 + AND-OR 最短路徑求解 ----------
+  // leafSet：視為「已經擁有、不需要合成」的起點集合
+  function solveShortestPath(leafSet) {
+    const settledCost = new Map();
+    const recipeChoice = new Map();
+    const tentative = new Map();
+    const heap = new MinHeap();
+
+    for (const el of leafSet) {
+      tentative.set(el, 0);
+      heap.push([0, el]);
+    }
+
+    while (heap.size) {
+      const [cost, item] = heap.pop();
+      if (settledCost.has(item)) continue;
+      settledCost.set(item, cost);
+
+      const related = itemIndex.get(item);
+      if (!related) continue;
+
+      for (const r of related) {
+        let candidate;
+        if (r.mats.length === 1) {
+          // 萃取：單一材料，A → 結果
+          candidate = cost + 1;
+        } else {
+          // 合成：兩個材料都齊備才能算
+          const other = r.mats[0] === item ? r.mats[1] : r.mats[0];
+          if (!settledCost.has(other)) continue;
+          candidate = cost + settledCost.get(other) + 1;
+        }
+        const cur = tentative.has(r.result) ? tentative.get(r.result) : Infinity;
+        if (candidate < cur) {
+          tentative.set(r.result, candidate);
+          recipeChoice.set(r.result, { mats: r.mats });
+          heap.push([candidate, r.result]);
+        }
+      }
+    }
+    return { cost: settledCost, choice: recipeChoice };
+  }
+
+  function buildIndexAndSolve() {
+    itemIndex = new Map(); // item -> [{mats,result}]
+    forwardIndex = new Map(); // "matA|matB" 或 "matA" -> Set(result)
+    const itemSet = new Set();
+    resultItems = new Set();
+
+    for (const r of recipes) {
+      for (const m of r.mats) itemSet.add(m);
+      itemSet.add(r.result);
+      resultItems.add(r.result);
+
+      const seen = new Set();
+      for (const m of r.mats) {
+        if (seen.has(m)) continue; // 避免同一材料重複索引（自我合成 A+A→B 的情況）
+        seen.add(m);
+        if (!itemIndex.has(m)) itemIndex.set(m, []);
+        itemIndex.get(m).push(r);
+      }
+
+      const fKey = forwardKey(r.mats);
+      if (!forwardIndex.has(fKey)) forwardIndex.set(fKey, new Set());
+      forwardIndex.get(fKey).add(r.result);
+    }
+    for (const el of BASE_ELEMENTS) itemSet.add(el);
+    for (const t of CHEAT_TOOLS) itemSet.add(t);
+    allItems = Array.from(itemSet).sort((a, b) => a.localeCompare(b, "zh-Hant"));
+
+    // 完全解：只有基本元素（若開啟偷吃步模式，再加上那 6 個破格工具）可以當起點
+    const baseLeafSet = currentBaseLeafSet();
+    solveBase = solveShortestPath(baseLeafSet);
+
+    // 盡力而為解：任何「目前資料裡沒看過配方」的造物，也先當作起點
+    // （包含基本元素本身，以及那些從沒被當作配方結果出現過的材料）
+    const impliedLeaves = new Set(baseLeafSet);
+    for (const name of itemSet) {
+      if (!resultItems.has(name)) impliedLeaves.add(name);
+    }
+    solveAny = solveShortestPath(impliedLeaves);
+  }
+
+  // ---------- 正向查詢：輸入材料 → 看能合成/萃取出什麼 ----------
+  function forwardKey(mats) {
+    if (mats.length === 1) return mats[0];
+    return mats.slice().sort().join("|");
+  }
+
+  function runForwardLookup() {
+    const a = forwardMat1.value.trim();
+    const b = forwardMat2.value.trim();
+
+    if (!a) {
+      forwardResult.innerHTML = `<div class="fr-empty">輸入材料 A，會自動列出資料庫裡跟它有關的所有配方</div>`;
+      return;
+    }
+
+    if (b) {
+      // A、B 都有填：精確查詢這組合成出什麼
+      const key = forwardKey([a, b]);
+      const results = forwardIndex.get(key);
+      if (!results || !results.size) {
+        forwardResult.innerHTML = `<div class="fr-empty">找不到「${escapeHtml(a)} + ${escapeHtml(b)}」的合成配方</div>`;
+        return;
+      }
+      const pills = Array.from(results)
+        .map((r) => `<span class="fr-pill" data-name="${escapeHtml(r)}">${escapeHtml(r)}<span class="fr-arrow">↗</span></span>`)
+        .join("");
+      forwardResult.innerHTML = `<div class="fr-label">合成結果（點一下可查看它的完整合成路徑）</div>${pills}`;
+      bindForwardPills();
+      return;
+    }
+
+    // 只填 A：自動列出資料庫裡所有跟 A 有關的配方
+    const related = itemIndex ? itemIndex.get(a) : null;
+    if (!related || !related.length) {
+      forwardResult.innerHTML = `<div class="fr-empty">目前資料裡沒有任何跟「${escapeHtml(a)}」有關的配方</div>`;
+      return;
+    }
+
+    const extractRecipes = related.filter((r) => r.mats.length === 1);
+    const combineRecipes = related.filter((r) => r.mats.length === 2);
+
+    let html = "";
+
+    if (extractRecipes.length) {
+      const extractResults = Array.from(new Set(extractRecipes.map((r) => r.result)));
+      const pills = extractResults
+        .map((r) => `<span class="fr-pill" data-name="${escapeHtml(r)}">${escapeHtml(a)} → ${escapeHtml(r)}<span class="fr-arrow">↗</span></span>`)
+        .join("");
+      html += `<div class="fr-label">✨ 有萃取配方</div>${pills}`;
+    }
+
+    if (combineRecipes.length) {
+      html += `<div class="fr-label" style="margin-top:${extractRecipes.length ? "12px" : "0"};">合成配方（共 ${combineRecipes.length} 種組合，點一下可查看結果的完整路徑）</div>`;
+      const pills = combineRecipes
+        .map((r) => {
+          const partner = r.mats[0] === a ? r.mats[1] : r.mats[0];
+          return `<span class="fr-pill" data-name="${escapeHtml(r.result)}">${escapeHtml(a)}+${escapeHtml(partner)} → ${escapeHtml(r.result)}<span class="fr-arrow">↗</span></span>`;
+        })
+        .join("");
+      html += pills;
+    }
+
+    forwardResult.innerHTML = html;
+    bindForwardPills();
+  }
+
+  function bindForwardPills() {
+    forwardResult.querySelectorAll(".fr-pill").forEach((pill) => {
+      pill.addEventListener("click", () => {
+        searchInput.value = pill.dataset.name;
+        runSearch();
+      });
+    });
+  }
+
+  // ---------- 查詢 + 路徑重建 ----------
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function isBase(name) {
+    return BASE_ELEMENTS.includes(name) || (cheatMode && CHEAT_TOOLS.includes(name));
+  }
+
+  // 是不是「盡力而為」路徑裡的暫代起點（非正牌元素，但目前資料沒查到它的配方）
+  function isImpliedLeaf(name) {
+    return !isBase(name) && resultItems && !resultItems.has(name);
+  }
+
+  let ownedSet = new Set(); // 使用者手動點選「已經擁有」的材料，暫時當作免費的葉節點
+
+  function buildStepList(target, solved) {
+    const { cost: settledCost, choice: recipeChoice } = solved;
+    // 收集目標往下追溯到的所有節點（每個造物只列一次，依步數排序）
+    const visited = new Set();
+    const order = [];
+    function walk(name) {
+      if (visited.has(name)) return;
+      visited.add(name);
+      if (isBase(name) || isImpliedLeaf(name) || ownedSet.has(name)) return;
+      const choice = recipeChoice.get(name);
+      if (!choice) return;
+      for (const m of choice.mats) walk(m);
+      order.push(name);
+    }
+    walk(target);
+    order.sort((x, y) => settledCost.get(x) - settledCost.get(y));
+    return order;
+  }
+
+  function leafClass(name) {
+    if (ownedSet.has(name)) return "leaf-owned";
+    if (isBase(name)) return "leaf-base";
+    if (isImpliedLeaf(name)) return "leaf-unknown";
+    return "";
+  }
+  function leafLabel(name) {
+    if (ownedSet.has(name)) return "已擁有";
+    if (isBase(name)) return "元素";
+    if (isImpliedLeaf(name)) return "未知配方";
+    return "";
+  }
+
+  function renderSummary(target, solved, opts) {
+    const steps = buildStepList(target, solved);
+    let html = "";
+    if (opts && opts.warning) {
+      html += `<div class="error-msg" style="margin-bottom:16px;">${opts.warning}</div>`;
+    }
+    html += `
+      <div class="result-summary">
+        <span class="steps">${steps.length}</span>
+        <span class="label">道配方，即可從基本元素合成出目標（材料不會用掉，每種配方只需做一次）</span>
+      </div>
+      <div class="owned-bar">
+        <span>🖱️ 點下面任一個材料名稱，標記成「已經擁有」，路徑會自動縮短</span>
+        ${ownedSet.size > 0 ? `<span class="owned-count">已擁有 ${ownedSet.size} 項</span><button type="button" id="clear-owned-btn" class="secondary">清空</button>` : ""}
+      </div>
+    `;
+    return html;
+  }
+
+  function reRenderCurrentResult() {
+    if (!lastResult) return;
+    renderFlat(lastResult.target, lastResult.solved, lastResult.opts);
+  }
+
+  function renderFlat(target, solved, opts) {
+    const { choice: recipeChoice } = solved;
+    const steps = buildStepList(target, solved);
+
+    let html = renderSummary(target, solved, opts) + `<div class="chain">`;
+
+    steps.forEach((name, idx) => {
+      const choice = recipeChoice.get(name);
+      const isFinal = name === target;
+      const isExtract = choice.mats.length === 1;
+      const matsHtml = choice.mats
+        .map((m) => {
+          const lc = leafClass(m);
+          const tag = lc ? `<span class="base-tag" style="${lc === "leaf-unknown" ? "background:var(--thunder);" : lc === "leaf-owned" ? "background:var(--wind);" : ""}">${leafLabel(m)}</span>` : "";
+          return `<span class="ownable-name" data-name="${escapeHtml(m)}">${escapeHtml(m)}</span>${tag}`;
+        })
+        .join(`<span class="op">+</span>`);
+      const resultHtml = isFinal
+        ? `<span class="result">${escapeHtml(name)}</span>`
+        : `<span class="ownable-name" data-name="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
+      html += `
+        <div class="step">
+          <div class="idx">步驟 ${idx + 1} · ${isExtract ? "萃取" : "合成"}</div>
+          <div class="formula">
+            ${matsHtml}
+            <span class="op arrow">→</span>
+            ${resultHtml}
+          </div>
+        </div>
+      `;
+    });
+
+    html += `</div>`;
+    resultBody.innerHTML = html;
+
+    resultBody.querySelectorAll(".ownable-name").forEach((el) => {
+      el.addEventListener("click", () => {
+        const name = el.dataset.name;
+        if (ownedSet.has(name)) ownedSet.delete(name);
+        else ownedSet.add(name);
+        reRenderCurrentResult();
+      });
+    });
+    const clearBtn = document.getElementById("clear-owned-btn");
+    if (clearBtn) {
+      clearBtn.addEventListener("click", () => {
+        ownedSet.clear();
+        reRenderCurrentResult();
+      });
+    }
+  }
+
+  // 純文字版本，給下載用：「步驟 N · matA+matB → result」
+  // 材料如果是基本元素、未知配方或已擁有，直接把標籤接在名字後面（不加空格、不加括號）
+  function buildPlainText(target, solved) {
+    const { choice: recipeChoice } = solved;
+    const steps = buildStepList(target, solved);
+    const lines = steps.map((name, idx) => {
+      const choice = recipeChoice.get(name);
+      const matsText = choice.mats
+        .map((m) => m + leafLabel(m))
+        .join("+");
+      return `步驟 ${idx + 1} · ${matsText} → ${name}`;
+    });
+    return lines.join("\n");
+  }
+
+  function downloadText(filename, content) {
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  let lastResult = null; // {target, solved, opts}
+
+  downloadBtn.addEventListener("click", () => {
+    if (!lastResult) return;
+    const text = buildPlainText(lastResult.target, lastResult.solved);
+    downloadText(`合成路線_${lastResult.target}.txt`, text);
+  });
+
+  function runSearch() {
+    const target = searchInput.value.trim();
+    lastResult = null;
+    downloadBtn.style.display = "none";
+
+    if (!target) {
+      resultBody.innerHTML = `<div class="empty-msg">請輸入想查詢的造物名稱</div>`;
+      return;
+    }
+
+    if (isBase(target)) {
+      resultBody.innerHTML = `<div class="empty-msg">「${escapeHtml(target)}」本身就是基本元素，不需要合成。</div>`;
+      return;
+    }
+
+    // 目標物本身如果從沒被當作任何配方的「結果」出現過，但確實有出現在資料裡
+    // （被用在其他配方的材料欄位），代表我們從沒看過怎麼做出它——這跟「完全沒聽過這個名字」是兩回事，
+    // 不能因為「盡力而為」邏輯把它誤判成 0 步就有的免費起點。
+    if (!isBase(target) && itemIndex.has(target) && isImpliedLeaf(target)) {
+      const usedIn = itemIndex.get(target);
+      resultBody.innerHTML = `
+        <div class="error-msg">
+          目前資料裡沒看過「${escapeHtml(target)}」是怎麼被合成或萃取出來的。<br/>
+          它從沒出現在任何配方的「結果」欄位，只是還沒收集到相關紀錄，不代表它不能做。
+          不過它有被用在 ${usedIn.length} 個其他配方的材料裡（可以用左側「正向查詢」反查用到它的配方）。
+        </div>
+      `;
+      return;
+    }
+
+    // 優先找完全回溯到 5 元素的路徑
+    if (solveBase.cost.has(target)) {
+      lastResult = { target, solved: solveBase, opts: null };
+      downloadBtn.style.display = "inline-block";
+      renderFlat(target, solveBase, null);
+      return;
+    }
+
+    // 找不到完全路徑，退而求其次找「盡力而為」路徑
+    if (solveAny.cost.has(target)) {
+      const opts = {
+        warning:
+          "⚠️ 目前資料還無法把這個造物完全回溯到 5 個基本元素，" +
+          "以下是能推到最接近的路徑。標示「未知配方」的材料，代表目前收集到的資料裡還沒看過它是怎麼合成出來的。",
+      };
+      lastResult = { target, solved: solveAny, opts };
+      downloadBtn.style.display = "inline-block";
+      renderFlat(target, solveAny, opts);
+      return;
+    }
+
+    // 兩種都找不到，才是真的毫無線索
+    const suggestions = allItems
+      .filter((n) => n !== target && n.includes(target) && solveAny.cost.has(n))
+      .slice(0, 8);
+    resultBody.innerHTML = `
+      <div class="error-msg">
+        找不到「${escapeHtml(target)}」的任何已知合成線索。<br/>
+        可能原因：這個造物名稱不在已載入的資料中，或它從未出現在任何配方的結果欄位。
+      </div>
+      ${suggestions.length ? `<div class="empty-msg">你是不是要找：${suggestions.map(escapeHtml).join("、")}</div>` : ""}
+    `;
+  }
+
+  searchBtn.addEventListener("click", runSearch);
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") runSearch();
+  });
+
+  forwardBtn.addEventListener("click", runForwardLookup);
+  let forwardDebounce = null;
+  [forwardMat1, forwardMat2].forEach((inp) => {
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") runForwardLookup();
+    });
+    inp.addEventListener("input", () => {
+      clearTimeout(forwardDebounce);
+      forwardDebounce = setTimeout(runForwardLookup, 200);
+    });
+  });
+
+  // ---------- 自動載入（部署到網站時用）----------
+  // 如果跟這個 HTML 檔放在同一個網址下有一個 recipes_data.json，
+  // 開頁面時會自動抓來載入，不用手動選檔案。
+  // 用 file:// 直接雙擊打開時，瀏覽器會擋掉這種跨檔案讀取（正常現象），
+  // 會自動失敗、什麼都不做，回到原本手動上傳的模式，不影響本機使用。
+  (function tryAutoLoad() {
+    if (location.protocol === "file:") return; // 本機開啟，不嘗試
+    fetch("./recipes_data.json", { cache: "no-store" })
+      .then((res) => (res.ok ? res.text() : Promise.reject()))
+      .then((text) => {
+        dropLabel.textContent = "已自動載入 recipes_data.json";
+        loadFromText(text, "recipes_data.json");
+      })
+      .catch(() => {
+        /* 找不到就維持手動上傳模式，不用管 */
+      });
+  })();
+})();
+</script>
+</body>
+</html>
