@@ -852,7 +852,7 @@
     return out;
   }
 
-  // 簡單 CSV 解析（支援雙引號包欄位、逗號、雙引號跳脫）。
+  // 簡單 CSV 解析（支援雙引號包欄位、逗號、雙引號跳脫）
   function parseCSV(text) {
     const rows = [];
     let row = [];
@@ -892,7 +892,7 @@
       const b = iMat2 === -1 ? "" : (r[iMat2] || "").trim();
       const result = (r[iRes] || "").trim();
       if (!a || !result) continue;
-      const mats = b ? [a, b] : [a]; // mat2 是空的就當作萃取（單一材料）。
+      const mats = b ? [a, b] : [a]; // mat2 是空的就當作萃取（單一材料）
       out.push({ mats, result });
     }
     return out;
@@ -1417,15 +1417,13 @@
   }
 
   // 純文字版本，給下載用：「步驟 N · matA+matB → result」
-  // 材料如果是基本元素、未知配方或已擁有，直接把標籤接在名字後面（不加空格、不加括號）
+  // 只留純造物名稱，不附加「元素」「未知配方」這類標籤
   function buildPlainText(target, solved) {
     const { choice: recipeChoice } = solved;
     const steps = buildStepList(target, solved);
     const lines = steps.map((name, idx) => {
       const choice = recipeChoice.get(name);
-      const matsText = choice.mats
-        .map((m) => m + leafLabel(m))
-        .join("+");
+      const matsText = choice.mats.join("+");
       return `步驟 ${idx + 1} · ${matsText} → ${name}`;
     });
     return lines.join("\n");
