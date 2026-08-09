@@ -413,6 +413,94 @@
     border-color: var(--gold);
   }
 
+  .tie-row {
+    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .tie-badge {
+    font-size: 11px;
+    color: var(--thunder);
+    font-family: ui-monospace, monospace;
+  }
+  .tie-select {
+    background: var(--bg-soft);
+    border: 1px solid var(--thunder);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 12px;
+    font-family: ui-monospace, monospace;
+    cursor: pointer;
+  }
+
+  .known-recipes-section {
+    margin-top: 28px;
+    padding-top: 20px;
+    border-top: 1px solid var(--panel-border);
+  }
+  .known-recipes-section h2 {
+    font-size: 13px;
+    font-family: ui-monospace, monospace;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin: 0 0 14px;
+  }
+  .known-recipe-row {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .known-recipe-row:last-child { border-bottom: none; }
+  .known-recipe-row .status-line-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  .known-recipe-row .status {
+    font-size: 11.5px;
+    font-family: ui-monospace, monospace;
+  }
+  .known-recipe-row .status.ok { color: var(--wind); }
+  .known-recipe-row .status.warn { color: var(--thunder); }
+  .known-recipe-row .formula { font-size: 16px; }
+
+  .mat-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: var(--bg-soft);
+    border: 1px solid var(--panel-border);
+    font-size: 15px;
+    color: var(--text);
+  }
+  .mat-pill small {
+    font-size: 10px;
+    font-family: ui-monospace, monospace;
+  }
+  .mat-pill.mp-base { border-color: var(--gold); }
+  .mat-pill.mp-base small { color: var(--gold); }
+  .mat-pill.mp-ok { border-color: var(--wind); }
+  .mat-pill.mp-ok small { color: var(--wind); }
+  .mat-pill.mp-warn { border-color: var(--thunder); }
+  .mat-pill.mp-warn small { color: var(--thunder); }
+
+  .known-recipe-clickable {
+    cursor: pointer;
+    border-radius: 10px;
+    transition: background 0.15s;
+    padding-left: 10px;
+    padding-right: 10px;
+    margin: 0 -10px;
+  }
+  .known-recipe-clickable:hover {
+    background: var(--gold-soft);
+  }
+
   .chain {
     position: relative;
     padding-left: 26px;
@@ -696,7 +784,7 @@
           <hr class="section-divider" />
 
           <div class="search-row">
-            <input type="text" id="search-input" list="item-list" placeholder="輸入造物名稱，例如：升級" disabled />
+            <input type="text" id="search-input" list="item-list" placeholder="輸入造物名稱或 emoji，例如：升級 / 🔥" disabled />
             <datalist id="item-list"></datalist>
             <button id="search-btn" type="button" disabled>查詢</button>
           </div>
@@ -724,6 +812,14 @@
             id="browse-filter"
             class="base-edit"
             placeholder="篩選造物名稱…"
+            style="margin-bottom:8px;"
+            disabled
+          />
+          <input
+            type="text"
+            id="browse-emoji-filter"
+            class="base-edit"
+            placeholder="依 emoji 篩選，可貼多個（含有任一個就算，例如 🔥💧）"
             style="margin-bottom:12px;"
             disabled
           />
@@ -766,6 +862,9 @@
   let itemIndex = null;   // ingredient name -> [recipe,...]
   let resultItems = null; // Set: 曾經是某配方結果的造物
   let forwardIndex = null; // "matA|matB" 或 "matA" -> Set(result)：正向查詢用
+  let resultIndex = null; // result -> [{mats,result}]：這個造物所有已知配方，反查用
+  let iconMap = null; // 造物名稱 -> emoji，只是顯示/搜尋用
+  let routeOverrides = new Map(); // 使用者手動切換過的「等價路線」選擇，item -> mats
   let solveBase = null;   // {cost, choice}  完全回溯到 5 元素（或加上偷吃步工具）
   let solveAny = null;    // {cost, choice}  允許用「未知配方材料」當起點
   let allItems = [];      // for datalist
@@ -788,9 +887,19 @@
     const q = query.trim();
     const out = [];
     for (let i = 0; i < allItems.length && out.length < DATALIST_LIMIT; i++) {
-      if (!q || allItems[i].includes(q)) out.push(allItems[i]);
+      const name = allItems[i];
+      const icon = (iconMap && iconMap.get(name)) || "";
+      // 名稱或 emoji 符合都算命中，這樣打 🔥 也能找到對應的造物
+      if (!q || name.includes(q) || icon.includes(q)) out.push(name);
     }
-    itemList.innerHTML = out.map((n) => `<option value="${escapeHtml(n)}">`).join("");
+    itemList.innerHTML = out
+      .map((n) => {
+        const icon = (iconMap && iconMap.get(n)) || "";
+        // datalist 的 label 屬性用來多顯示 emoji 給使用者看，value 還是純名稱
+        // （這樣選下去、按查詢，比對的還是名稱，邏輯不受影響）
+        return `<option value="${escapeHtml(n)}" label="${escapeHtml(icon ? icon + " " + n : n)}">`;
+      })
+      .join("");
   }
 
   let datalistDebounce = null;
@@ -810,6 +919,7 @@
   const forwardBtn = document.getElementById("forward-btn");
   const forwardResult = document.getElementById("forward-result");
   const browseFilter = document.getElementById("browse-filter");
+  const browseEmojiFilter = document.getElementById("browse-emoji-filter");
   const browseList = document.getElementById("browse-list");
   const browseCount = document.getElementById("browse-count");
 
@@ -847,7 +957,9 @@
       const mats = rawMats.map(normalizeName).filter(Boolean).slice(0, 2);
       const result = normalizeName(item.result);
       if (!mats.length || !result) continue;
-      out.push({ mats, result });
+      const matIcons = Array.isArray(item.matIcons) ? item.matIcons.slice(0, mats.length) : [];
+      const resultIcon = typeof item.resultIcon === "string" ? item.resultIcon.trim() : "";
+      out.push({ mats, result, matIcons, resultIcon });
     }
     return out;
   }
@@ -884,6 +996,9 @@
     const iMat1 = header.indexOf("mat1");
     const iMat2 = header.indexOf("mat2");
     const iRes = header.indexOf("result");
+    const iMat1Icon = header.indexOf("mat1_icon");
+    const iMat2Icon = header.indexOf("mat2_icon");
+    const iResIcon = header.indexOf("result_icon");
     const out = [];
     if (iMat1 === -1 || iRes === -1) return out;
     for (let i = 1; i < rows.length; i++) {
@@ -893,7 +1008,11 @@
       const result = (r[iRes] || "").trim();
       if (!a || !result) continue;
       const mats = b ? [a, b] : [a]; // mat2 是空的就當作萃取（單一材料）
-      out.push({ mats, result });
+      const iconA = iMat1Icon === -1 ? "" : (r[iMat1Icon] || "").trim();
+      const iconB = iMat2Icon === -1 ? "" : (r[iMat2Icon] || "").trim();
+      const matIcons = b ? [iconA, iconB] : [iconA];
+      const resultIcon = iResIcon === -1 ? "" : (r[iResIcon] || "").trim();
+      out.push({ mats, result, matIcons, resultIcon });
     }
     return out;
   }
@@ -941,6 +1060,7 @@
     searchInput.disabled = false;
     searchBtn.disabled = false;
     browseFilter.disabled = false;
+    browseEmojiFilter.disabled = false;
     forwardMat1.disabled = false;
     forwardMat2.disabled = false;
     forwardBtn.disabled = false;
@@ -969,15 +1089,30 @@
   let browseLimit = 300;
   const BROWSE_PAGE_SIZE = 300;
 
+  // 把使用者貼的一串文字拆成一個個 emoji 字元（用 Array.from 依 Unicode code point 拆，
+  // 大部分常見 emoji 都能正確處理；順便濾掉空白）
+  function parseEmojiList(text) {
+    return Array.from(text.replace(/\s+/g, ""));
+  }
+
+  function matchesEmojiFilter(name, emojiChars) {
+    if (!emojiChars.length) return true;
+    const icon = (iconMap && iconMap.get(name)) || "";
+    if (!icon) return false;
+    return emojiChars.some((e) => icon.includes(e));
+  }
+
   function renderBrowseList() {
     if (!solveBase) return;
     const filterText = browseFilter.value.trim();
+    const emojiChars = parseEmojiList(browseEmojiFilter.value.trim());
 
     // 先用演算法內部的估計值排序、篩選、截斷到顯示上限（這個值是快速估計，
     // 大資料量下才不會每次輸入都要重新计算整個資料集）
     const rough = Array.from(solveBase.cost.entries())
       .filter(([name]) => !isBase(name))
       .filter(([name]) => !filterText || name.includes(filterText))
+      .filter(([name]) => matchesEmojiFilter(name, emojiChars))
       .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0], "zh-Hant"));
 
     browseCount.textContent = `（共 ${rough.length} 項，完全回溯到基本元素）`;
@@ -1012,7 +1147,7 @@
               .map(
                 (name) =>
                   `<span class="browse-pill" data-name="${escapeHtml(name)}">
-                     ${escapeHtml(name)}<span class="steps-badge">${steps}</span>
+                     ${withIcon(name)}<span class="steps-badge">${steps}</span>
                    </span>`
               )
               .join("")}
@@ -1052,6 +1187,10 @@
 
   browseFilter.addEventListener("input", () => {
     browseLimit = BROWSE_PAGE_SIZE; // 重新輸入關鍵字時，顯示筆數重置
+    renderBrowseList();
+  });
+  browseEmojiFilter.addEventListener("input", () => {
+    browseLimit = BROWSE_PAGE_SIZE;
     renderBrowseList();
   });
 
@@ -1134,11 +1273,18 @@
 
   // ---------- 建立索引 + AND-OR 最短路徑求解 ----------
   // leafSet：視為「已經擁有、不需要合成」的起點集合
+  const MAX_TIES = 6; // 同一造物最多記錄幾種等價（同成本）配方，避免極端情況塞爆畫面
+
   function solveShortestPath(leafSet) {
     const settledCost = new Map();
     const recipeChoice = new Map();
+    const ties = new Map(); // item -> [{mats}, {mats}, ...] 所有跟目前最低成本打平的配方
     const tentative = new Map();
     const heap = new MinHeap();
+
+    function tieKey(mats) {
+      return mats.slice().sort().join("|");
+    }
 
     for (const el of leafSet) {
       tentative.set(el, 0);
@@ -1158,8 +1304,12 @@
         if (r.mats.length === 1) {
           // 萃取：單一材料，A → 結果
           candidate = cost + 1;
+        } else if (r.mats[0] === r.mats[1]) {
+          // 自我合成（A+A→B）：材料不會消失，只需要做一次 A 就能重複拿來用，
+          // 不是真的要做兩份 A，所以不能算 2×cost(A)，只需要 cost(A)+1
+          candidate = cost + 1;
         } else {
-          // 合成：兩個材料都齊備才能算
+          // 合成：兩個不同材料都齊備才能算
           const other = r.mats[0] === item ? r.mats[1] : r.mats[0];
           if (!settledCost.has(other)) continue;
           candidate = cost + settledCost.get(other) + 1;
@@ -1168,23 +1318,41 @@
         if (candidate < cur) {
           tentative.set(r.result, candidate);
           recipeChoice.set(r.result, { mats: r.mats });
+          ties.set(r.result, [{ mats: r.mats }]);
           heap.push([candidate, r.result]);
+        } else if (candidate === cur) {
+          // 平手：記錄成另一個等價選項，不用重新丟進 heap（成本沒有變更低）
+          const arr = ties.get(r.result) || [];
+          const key = tieKey(r.mats);
+          if (arr.length < MAX_TIES && !arr.some((t) => tieKey(t.mats) === key)) {
+            arr.push({ mats: r.mats });
+            ties.set(r.result, arr);
+          }
         }
       }
     }
-    return { cost: settledCost, choice: recipeChoice };
+    return { cost: settledCost, choice: recipeChoice, ties };
   }
 
   function buildIndexAndSolve() {
     itemIndex = new Map(); // item -> [{mats,result}]
     forwardIndex = new Map(); // "matA|matB" 或 "matA" -> Set(result)
+    resultIndex = new Map(); // result -> [{mats,result}]，這個造物所有已知配方（不管能不能回溯到元素）
+    iconMap = new Map(); // 造物名稱 -> emoji（可能是好幾個符號組成的字串），只是顯示/搜尋用，不影響任何比對邏輯
     const itemSet = new Set();
     resultItems = new Set();
+
+    function noteIcon(name, icon) {
+      if (icon && !iconMap.has(name)) iconMap.set(name, icon);
+    }
 
     for (const r of recipes) {
       for (const m of r.mats) itemSet.add(m);
       itemSet.add(r.result);
       resultItems.add(r.result);
+
+      r.mats.forEach((m, i) => noteIcon(m, r.matIcons && r.matIcons[i]));
+      noteIcon(r.result, r.resultIcon);
 
       const seen = new Set();
       for (const m of r.mats) {
@@ -1197,6 +1365,9 @@
       const fKey = forwardKey(r.mats);
       if (!forwardIndex.has(fKey)) forwardIndex.set(fKey, new Set());
       forwardIndex.get(fKey).add(r.result);
+
+      if (!resultIndex.has(r.result)) resultIndex.set(r.result, []);
+      resultIndex.get(r.result).push(r);
     }
     for (const el of BASE_ELEMENTS) itemSet.add(el);
     for (const t of CHEAT_TOOLS) itemSet.add(t);
@@ -1239,7 +1410,7 @@
         return;
       }
       const pills = Array.from(results)
-        .map((r) => `<span class="fr-pill" data-name="${escapeHtml(r)}">${escapeHtml(r)}<span class="fr-arrow">↗</span></span>`)
+        .map((r) => `<span class="fr-pill" data-name="${escapeHtml(r)}">${withIcon(r)}<span class="fr-arrow">↗</span></span>`)
         .join("");
       forwardResult.innerHTML = `<div class="fr-label">合成結果（點一下可查看它的完整合成路徑）</div>${pills}`;
       bindForwardPills();
@@ -1261,7 +1432,7 @@
     if (extractRecipes.length) {
       const extractResults = Array.from(new Set(extractRecipes.map((r) => r.result)));
       const pills = extractResults
-        .map((r) => `<span class="fr-pill" data-name="${escapeHtml(r)}">${escapeHtml(a)} → ${escapeHtml(r)}<span class="fr-arrow">↗</span></span>`)
+        .map((r) => `<span class="fr-pill" data-name="${escapeHtml(r)}">${withIcon(a)} → ${withIcon(r)}<span class="fr-arrow">↗</span></span>`)
         .join("");
       html += `<div class="fr-label">✨ 有萃取配方</div>${pills}`;
     }
@@ -1271,7 +1442,7 @@
       const pills = combineRecipes
         .map((r) => {
           const partner = r.mats[0] === a ? r.mats[1] : r.mats[0];
-          return `<span class="fr-pill" data-name="${escapeHtml(r.result)}">${escapeHtml(a)}+${escapeHtml(partner)} → ${escapeHtml(r.result)}<span class="fr-arrow">↗</span></span>`;
+          return `<span class="fr-pill" data-name="${escapeHtml(r.result)}">${withIcon(a)}+${withIcon(partner)} → ${withIcon(r.result)}<span class="fr-arrow">↗</span></span>`;
         })
         .join("");
       html += pills;
@@ -1297,6 +1468,12 @@
     }[c]));
   }
 
+  // 顯示用：如果知道這個造物的 emoji，回傳「emoji 名稱」；不知道就只回傳名稱
+  function withIcon(name) {
+    const icon = iconMap && iconMap.get(name);
+    return icon ? `${escapeHtml(icon)} ${escapeHtml(name)}` : escapeHtml(name);
+  }
+
   function isBase(name) {
     return BASE_ELEMENTS.includes(name) || (cheatMode && CHEAT_TOOLS.includes(name));
   }
@@ -1307,36 +1484,163 @@
   }
 
   let ownedSet = new Set(); // 使用者手動點選「已經擁有」的材料，暫時當作免費的葉節點
+  let autoOptimizations = new Map(); // 演算法自動優化找到的替代配方，item -> mats（跟使用者手動選的分開存）
+
+  // 取得某個造物實際要用的配方：使用者手動選的優先，再來是自動優化找到的，最後才是演算法預設選擇
+  function getChoice(name, solved) {
+    if (routeOverrides.has(name)) return { mats: routeOverrides.get(name) };
+    if (autoOptimizations.has(name)) return { mats: autoOptimizations.get(name) };
+    return solved.choice.get(name);
+  }
+  function getTies(name, solved) {
+    return (solved.ties && solved.ties.get(name)) || [];
+  }
+  function matsKey(mats) {
+    return mats.slice().sort().join("|");
+  }
+
+  // 演算法選出來的成本最低配方，不一定等於「整棵樹真正去重過最少造物數」的配方
+  // （因為成本估算沒辦法看到「這個材料本來就會因為別的分支而被做出來、可以共用」這件事）。
+  // 這裡用簡單的爬山優化：針對路徑上每個造物，實際試試看有沒有其他已知配方可以讓
+  // 真實去重步數變得更少，有就採用，重複幾輪直到換不出更好的為止。
+  const OPTIMIZE_MAX_PASSES = 6;
+  const OPTIMIZE_MAX_ALTS_PER_ITEM = 20;
+  const OPTIMIZE_MAX_EVALS = 3000; // 保底上限，避免極端情況下跑太久
+
+  // 檢查從 startItem 開始展開，會不會繞回自己形成循環依賴
+  // （替換配方時有可能不小心把某個材料的新定義又繞回去用到它自己，
+  // 這樣路徑會壞掉，絕對不能接受）
+  function hasCycle(startItem, solved) {
+    const path = new Set();
+    function dfs(name) {
+      if (path.has(name)) return true;
+      if (isBase(name) || ownedSet.has(name)) return false;
+      const choice = getChoice(name, solved);
+      if (!choice) return false;
+      path.add(name);
+      for (const m of choice.mats) {
+        if (dfs(m)) return true;
+      }
+      path.delete(name);
+      return false;
+    }
+    return dfs(startItem);
+  }
+
+  function optimizeRoute(target, solved) {
+    autoOptimizations = new Map();
+    if (!resultIndex) return;
+
+    let evals = 0;
+    for (let pass = 0; pass < OPTIMIZE_MAX_PASSES; pass++) {
+      const steps = buildStepList(target, solved);
+      let improvedThisPass = false;
+
+      for (const item of steps) {
+        if (evals >= OPTIMIZE_MAX_EVALS) return;
+        const alternatives = resultIndex.get(item);
+        if (!alternatives || alternatives.length < 2) continue;
+
+        const currentChoice = getChoice(item, solved);
+        const currentKey = matsKey(currentChoice.mats);
+        let bestLen = buildStepList(target, solved).length;
+        let bestMats = null;
+
+        // 先篩出「材料本身在這個 solve 情境下可解析」的候選，
+        // 並依材料成本高低排序（成本低的代表大概率能共用到已經做出來的東西，
+        // 比較可能是有效的改善方向）。造物很受歡迎、候選一多，
+        // 才不會被排在後面、但其實更好的選項卡在數量上限外面試不到。
+        const candidates = alternatives
+          .filter((alt) => matsKey(alt.mats) !== currentKey)
+          .filter((alt) => alt.mats.every((m) => solved.cost.has(m) || ownedSet.has(m)))
+          .sort((a, b) => {
+            const costA = a.mats.reduce((s, m) => s + (solved.cost.get(m) || 0), 0);
+            const costB = b.mats.reduce((s, m) => s + (solved.cost.get(m) || 0), 0);
+            return costA - costB;
+          })
+          .slice(0, OPTIMIZE_MAX_ALTS_PER_ITEM);
+
+        for (const alt of candidates) {
+          evals++;
+
+          const prevOverride = autoOptimizations.get(item);
+          autoOptimizations.set(item, alt.mats);
+
+          // 換了之後有沒有不小心繞回自己形成循環？有的話這個替代方案直接淘汰
+          if (hasCycle(item, solved)) {
+            if (prevOverride) autoOptimizations.set(item, prevOverride);
+            else autoOptimizations.delete(item);
+            if (evals >= OPTIMIZE_MAX_EVALS) break;
+            continue;
+          }
+
+          const len = buildStepList(target, solved).length;
+
+          if (len < bestLen) {
+            bestLen = len;
+            bestMats = alt.mats;
+          }
+          // 先恢復，等這個造物所有替代方案都試完，再套用真正最好的那個
+          if (prevOverride) autoOptimizations.set(item, prevOverride);
+          else autoOptimizations.delete(item);
+
+          if (evals >= OPTIMIZE_MAX_EVALS) break;
+        }
+
+        if (bestMats) {
+          autoOptimizations.set(item, bestMats);
+          improvedThisPass = true;
+        }
+      }
+
+      if (!improvedThisPass) break;
+    }
+
+    // 最後做一次整體驗證：就算逐步替換時都個別檢查過，多輪疊加下理論上還是有極小
+    // 機率湊出沒預期到的循環。這裡從目標物整體再檢查一次，有問題就整批放棄優化，
+    // 退回保證正確、雖然可能沒那麼短的原始結果，安全第一。
+    if (hasCycle(target, solved)) {
+      autoOptimizations = new Map();
+    }
+  }
 
   function buildStepList(target, solved) {
-    const { cost: settledCost, choice: recipeChoice } = solved;
+    const { cost: settledCost } = solved;
     // 收集目標往下追溯到的所有節點（每個造物只列一次，依步數排序）
     const visited = new Set();
     const order = [];
     function walk(name) {
       if (visited.has(name)) return;
       visited.add(name);
-      if (isBase(name) || isImpliedLeaf(name) || ownedSet.has(name)) return;
-      const choice = recipeChoice.get(name);
+      if (isBase(name) || ownedSet.has(name)) return;
+      const choice = getChoice(name, solved);
+      // 這裡改用「這個 solve 情境下有沒有真的算出可用的配方」當作是否展開的判斷依據，
+      // 而不是「這個造物是否曾經在資料裡當過某筆配方的結果」——
+      // 因為有可能曾經有配方紀錄，但那筆配方本身往下追卻追不到基本元素，
+      // 這種情況也該當成「未知/無法展開」，兩處判斷標準才會一致。
       if (!choice) return;
       for (const m of choice.mats) walk(m);
       order.push(name);
     }
     walk(target);
-    order.sort((x, y) => settledCost.get(x) - settledCost.get(y));
+    order.sort((x, y) => {
+      const cx = settledCost.has(x) ? settledCost.get(x) : Infinity;
+      const cy = settledCost.has(y) ? settledCost.get(y) : Infinity;
+      return cx - cy;
+    });
     return order;
   }
 
-  function leafClass(name) {
+  function leafClass(name, solved) {
     if (ownedSet.has(name)) return "leaf-owned";
     if (isBase(name)) return "leaf-base";
-    if (isImpliedLeaf(name)) return "leaf-unknown";
+    if (!getChoice(name, solved)) return "leaf-unknown";
     return "";
   }
-  function leafLabel(name) {
+  function leafLabel(name, solved) {
     if (ownedSet.has(name)) return "已擁有";
     if (isBase(name)) return "元素";
-    if (isImpliedLeaf(name)) return "未知配方";
+    if (!getChoice(name, solved)) return "未知配方";
     return "";
   }
 
@@ -1352,8 +1656,9 @@
         <span class="label">道配方，即可從基本元素合成出目標（材料不會用掉，每種配方只需做一次）</span>
       </div>
       <div class="owned-bar">
-        <span>🖱️ 點下面任一個材料名稱，標記成「已經擁有」，路徑會自動縮短</span>
-        ${ownedSet.size > 0 ? `<span class="owned-count">已擁有 ${ownedSet.size} 項</span><button type="button" id="clear-owned-btn" class="secondary">清空</button>` : ""}
+        <span>🖱️ 點材料名稱標記「已擁有」縮短路徑；步驟旁的「⇄ 切換」代表有其他等價配方可選</span>
+        ${ownedSet.size > 0 ? `<span class="owned-count">已擁有 ${ownedSet.size} 項</span><button type="button" id="clear-owned-btn" class="secondary">清空已擁有</button>` : ""}
+        ${routeOverrides.size > 0 ? `<span class="owned-count" style="color:var(--thunder);">已手動切換 ${routeOverrides.size} 個路線</span><button type="button" id="clear-routes-btn" class="secondary">重設路線</button>` : ""}
       </div>
     `;
     return html;
@@ -1365,25 +1670,43 @@
   }
 
   function renderFlat(target, solved, opts) {
-    const { choice: recipeChoice } = solved;
     const steps = buildStepList(target, solved);
 
     let html = renderSummary(target, solved, opts) + `<div class="chain">`;
 
     steps.forEach((name, idx) => {
-      const choice = recipeChoice.get(name);
+      const choice = getChoice(name, solved);
+      const ties = getTies(name, solved);
       const isFinal = name === target;
       const isExtract = choice.mats.length === 1;
       const matsHtml = choice.mats
         .map((m) => {
-          const lc = leafClass(m);
-          const tag = lc ? `<span class="base-tag" style="${lc === "leaf-unknown" ? "background:var(--thunder);" : lc === "leaf-owned" ? "background:var(--wind);" : ""}">${leafLabel(m)}</span>` : "";
-          return `<span class="ownable-name" data-name="${escapeHtml(m)}">${escapeHtml(m)}</span>${tag}`;
+          const lc = leafClass(m, solved);
+          const tag = lc ? `<span class="base-tag" style="${lc === "leaf-unknown" ? "background:var(--thunder);" : lc === "leaf-owned" ? "background:var(--wind);" : ""}">${leafLabel(m, solved)}</span>` : "";
+          return `<span class="ownable-name" data-name="${escapeHtml(m)}">${withIcon(m)}</span>${tag}`;
         })
         .join(`<span class="op">+</span>`);
       const resultHtml = isFinal
-        ? `<span class="result">${escapeHtml(name)}</span>`
-        : `<span class="ownable-name" data-name="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
+        ? `<span class="result">${withIcon(name)}</span>`
+        : `<span class="ownable-name" data-name="${escapeHtml(name)}">${withIcon(name)}</span>`;
+
+      let tieHtml = "";
+      if (ties.length > 1) {
+        const options = ties
+          .map((t) => {
+            const label = t.mats.join("+");
+            const selected = t.mats.slice().sort().join("|") === choice.mats.slice().sort().join("|");
+            return `<option value="${escapeHtml(t.mats.join("|"))}" ${selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+          })
+          .join("");
+        tieHtml = `
+          <select class="tie-select" data-result="${escapeHtml(name)}">
+            ${options}
+          </select>
+          <span class="tie-badge">⇄ ${ties.length} 種等價配方</span>
+        `;
+      }
+
       html += `
         <div class="step">
           <div class="idx">步驟 ${idx + 1} · ${isExtract ? "萃取" : "合成"}</div>
@@ -1392,11 +1715,13 @@
             <span class="op arrow">→</span>
             ${resultHtml}
           </div>
+          ${tieHtml ? `<div class="tie-row">${tieHtml}</div>` : ""}
         </div>
       `;
     });
 
     html += `</div>`;
+    html += renderAllKnownRecipes(target);
     resultBody.innerHTML = html;
 
     resultBody.querySelectorAll(".ownable-name").forEach((el) => {
@@ -1414,15 +1739,90 @@
         reRenderCurrentResult();
       });
     }
+    const clearRoutesBtn = document.getElementById("clear-routes-btn");
+    if (clearRoutesBtn) {
+      clearRoutesBtn.addEventListener("click", () => {
+        routeOverrides.clear();
+        reRenderCurrentResult();
+      });
+    }
+    resultBody.querySelectorAll(".tie-select").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const name = sel.dataset.result;
+        const mats = sel.value.split("|");
+        routeOverrides.set(name, mats);
+        reRenderCurrentResult();
+      });
+    });
+    wireKnownRecipeClicks(target);
+  }
+
+  // ---------- 所有已知配方（不只最短路徑，反查用）----------
+  function craftabilityPill(m) {
+    let cls = "mp-warn", label = "未知配方";
+    if (isBase(m)) { cls = "mp-base"; label = "元素"; }
+    else if (solveBase && solveBase.cost.has(m)) { cls = "mp-ok"; label = "可製作"; }
+    return `<span class="mat-pill ${cls}">${withIcon(m)}<small>${label}</small></span>`;
+  }
+
+  function renderAllKnownRecipes(target) {
+    const list = resultIndex ? resultIndex.get(target) : null;
+    if (!list || !list.length) return "";
+
+    const rows = list
+      .map((r, idx) => {
+        const isExtract = r.mats.length === 1;
+        const allCraftable = r.mats.every((m) => isBase(m) || (solveBase && solveBase.cost.has(m)));
+        const matsHtml = r.mats.map((m) => craftabilityPill(m)).join(`<span class="op">+</span>`);
+        const statusHtml = allCraftable
+          ? `<div class="status ok">✅ 兩邊材料都能從基本元素合成</div>`
+          : `<div class="status warn">⚠️ 有材料目前還不知道怎麼合成</div>`;
+        return `
+          <div class="known-recipe-row known-recipe-clickable" data-idx="${idx}" title="點一下查看這個配方的完整路徑">
+            <div class="status-line-wrap">
+              <span class="kind-badge ${isExtract ? "extract" : "combine"}">${isExtract ? "萃取" : "合成"}</span>
+              ${statusHtml}
+            </div>
+            <div class="formula">${matsHtml}<span class="op arrow">→</span>${withIcon(target)}</div>
+          </div>
+        `;
+      })
+      .join("");
+
+    return `
+      <div class="known-recipes-section">
+        <h2>所有已知能合成「${escapeHtml(target)}」的配方（共 ${list.length} 種，不限最短路徑，點一下可查看該配方的完整路徑）</h2>
+        ${rows}
+      </div>
+    `;
+  }
+
+  function wireKnownRecipeClicks(target) {
+    const list = resultIndex ? resultIndex.get(target) : null;
+    if (!list) return;
+    resultBody.querySelectorAll(".known-recipe-clickable").forEach((el) => {
+      el.addEventListener("click", () => {
+        const idx = Number(el.dataset.idx);
+        const r = list[idx];
+        if (!r) return;
+        routeOverrides.set(target, r.mats);
+        if (!lastResult) {
+          // 原本完全查無主要路徑，這裡強制用「盡力而為」的資料集，
+          // 材料是否齊全由樹狀展開自然反映（未知的材料會標成「未知配方」）
+          lastResult = { target, solved: solveAny, opts: null };
+        }
+        reRenderCurrentResult();
+        resultBody.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
   }
 
   // 純文字版本，給下載用：「步驟 N · matA+matB → result」
   // 只留純造物名稱，不附加「元素」「未知配方」這類標籤
   function buildPlainText(target, solved) {
-    const { choice: recipeChoice } = solved;
     const steps = buildStepList(target, solved);
     const lines = steps.map((name, idx) => {
-      const choice = recipeChoice.get(name);
+      const choice = getChoice(name, solved);
       const matsText = choice.mats.join("+");
       return `步驟 ${idx + 1} · ${matsText} → ${name}`;
     });
@@ -1481,6 +1881,7 @@
 
     // 優先找完全回溯到 5 元素的路徑
     if (solveBase.cost.has(target)) {
+      optimizeRoute(target, solveBase);
       lastResult = { target, solved: solveBase, opts: null };
       downloadBtn.style.display = "inline-block";
       renderFlat(target, solveBase, null);
@@ -1489,6 +1890,7 @@
 
     // 找不到完全路徑，退而求其次找「盡力而為」路徑
     if (solveAny.cost.has(target)) {
+      optimizeRoute(target, solveAny);
       const opts = {
         warning:
           "⚠️ 目前資料還無法把這個造物完全回溯到 5 個基本元素，" +
@@ -1510,7 +1912,9 @@
         可能原因：這個造物名稱不在已載入的資料中，或它從未出現在任何配方的結果欄位。
       </div>
       ${suggestions.length ? `<div class="empty-msg">你是不是要找：${suggestions.map(escapeHtml).join("、")}</div>` : ""}
+      ${renderAllKnownRecipes(target)}
     `;
+    wireKnownRecipeClicks(target);
   }
 
   searchBtn.addEventListener("click", runSearch);
@@ -1527,6 +1931,8 @@
     inp.addEventListener("input", () => {
       clearTimeout(forwardDebounce);
       forwardDebounce = setTimeout(runForwardLookup, 200);
+      clearTimeout(datalistDebounce);
+      datalistDebounce = setTimeout(() => updateDatalist(inp.value), 120);
     });
   });
 
