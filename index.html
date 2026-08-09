@@ -681,6 +681,56 @@
     color: #241a0c;
   }
 
+  .browse-mode-toggle {
+    display: flex;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+  .browse-mode-toggle button {
+    flex: 1;
+    background: transparent;
+    color: var(--text-dim);
+    border: none;
+    border-radius: 0;
+    padding: 7px 10px;
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+  .browse-mode-toggle button + button {
+    border-left: 1px solid var(--panel-border);
+  }
+  .browse-mode-toggle button.active {
+    background: var(--gold);
+    color: #241a0c;
+  }
+
+  .priority-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--panel-border);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .priority-row:hover { background: var(--gold-soft); }
+  .priority-row:last-child { border-bottom: none; }
+  .priority-row .pr-name { font-size: 14px; }
+  .priority-row .pr-stats {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    text-align: right;
+    white-space: nowrap;
+  }
+  .priority-row .pr-score {
+    color: var(--gold);
+    font-weight: 700;
+  }
+
   .tree-root { padding: 4px 0; }
   .tree-node { position: relative; }
   .tree-node-row {
@@ -754,7 +804,7 @@
           <span class="toggle-slider"></span>
         </span>
         <span class="cheat-toggle-label">
-          偷吃步模式：把「去尾／去首字／取首字／取尾字／去除前綴／去除後綴」也當作基本元素
+          偷吃步模式：把「去尾／去首字／取首字／取尾字／去除前綴／去除後綴／相反／反向」也當作基本元素
         </span>
       </label>
     </header>
@@ -807,6 +857,10 @@
             ② 瀏覽已知路徑清單
             <span id="browse-count" style="font-weight:normal;font-size:11px;color:var(--text-dim);"></span>
           </h2>
+          <div class="browse-mode-toggle">
+            <button type="button" id="mode-browse" class="active">依步數瀏覽</button>
+            <button type="button" id="mode-priority">優先補強清單</button>
+          </div>
           <input
             type="text"
             id="browse-filter"
@@ -823,6 +877,9 @@
             style="margin-bottom:12px;"
             disabled
           />
+          <div id="priority-hint" style="display:none;font-size:11.5px;color:var(--text-dim);font-family:ui-monospace,monospace;margin-bottom:10px;line-height:1.6;">
+            列出被引用超過 10 次、但目前已知配方數很少的詞條，依「引用次數 ÷ 配方數」由高到低排序——這些是補一條配方就能讓最多東西受益的地方。
+          </div>
           <div id="browse-list" class="browse-list"></div>
         </div>
       </div>
@@ -856,7 +913,7 @@
   };
 
   let BASE_ELEMENTS = ["火", "水", "土", "雷", "風"];
-  const CHEAT_TOOLS = ["去尾", "去首字", "取首字", "取尾字", "去除前綴", "去除後綴"];
+  const CHEAT_TOOLS = ["去尾", "去首字", "取首字", "取尾字", "去除前綴", "去除後綴", "相反", "反向"];
   let cheatMode = false;
   let recipes = [];       // [{a,b,result}]
   let itemIndex = null;   // ingredient name -> [recipe,...]
@@ -920,6 +977,9 @@
   const forwardResult = document.getElementById("forward-result");
   const browseFilter = document.getElementById("browse-filter");
   const browseEmojiFilter = document.getElementById("browse-emoji-filter");
+  const modeBrowseBtn = document.getElementById("mode-browse");
+  const modePriorityBtn = document.getElementById("mode-priority");
+  const priorityHint = document.getElementById("priority-hint");
   const browseList = document.getElementById("browse-list");
   const browseCount = document.getElementById("browse-count");
 
@@ -1069,7 +1129,7 @@
     console.timeEnd("[perf] datalist populate");
     console.time("[perf] renderBrowseList");
     browseLimit = BROWSE_PAGE_SIZE;
-    renderBrowseList();
+    renderCurrentBrowseMode();
     console.timeEnd("[perf] renderBrowseList");
   }
 
@@ -1081,13 +1141,92 @@
     buildIndexAndSolve();
     updateLoadStatusText();
     browseLimit = BROWSE_PAGE_SIZE;
-    renderBrowseList();
+    renderCurrentBrowseMode();
     if (lastResult) runSearch(); // 重新整理目前顯示中的查詢結果
   });
 
   // ---------- 瀏覽清單：列出所有完全回溯到基本元素的造物 ----------
   let browseLimit = 300;
   const BROWSE_PAGE_SIZE = 300;
+  let browseMode = "browse"; // "browse" | "priority"
+
+  // ---------- 優先補強清單：被引用很多次、但目前已知配方數很少的詞條 ----------
+  const PRIORITY_MIN_USAGE = 10; // 引用次數門檻，要 > 這個數字才有資格上榜
+  const PRIORITY_TOP_N = 100;
+
+  function computePriorityList() {
+    if (!itemIndex || !resultIndex) return [];
+    const rows = [];
+    for (const name of allItems) {
+      if (isBase(name)) continue;
+      const usageCount = (itemIndex.get(name) || []).length;
+      if (usageCount <= PRIORITY_MIN_USAGE) continue;
+      const recipeCount = (resultIndex.get(name) || []).length;
+      if (recipeCount < 1) continue; // 完全沒有配方的，屬於「未知配方」，不是這裡要看的
+      const score = usageCount / recipeCount;
+      rows.push({ name, usageCount, recipeCount, score });
+    }
+    rows.sort((a, b) => b.score - a.score || b.usageCount - a.usageCount);
+    return rows.slice(0, PRIORITY_TOP_N);
+  }
+
+  function renderPriorityList() {
+    const filterText = browseFilter.value.trim();
+    const rows = computePriorityList().filter(
+      (r) => !filterText || r.name.includes(filterText)
+    );
+
+    browseCount.textContent = `（前 ${rows.length} 名，引用 >${PRIORITY_MIN_USAGE} 次，依「引用次數÷配方數」排序）`;
+
+    if (!rows.length) {
+      browseList.innerHTML = `<div class="browse-empty">目前沒有符合條件的詞條</div>`;
+      return;
+    }
+
+    browseList.innerHTML = rows
+      .map(
+        (r, idx) => `
+          <div class="priority-row" data-name="${escapeHtml(r.name)}">
+            <span class="pr-name">#${idx + 1}　${withIcon(r.name)}</span>
+            <span class="pr-stats">
+              引用 ${r.usageCount} 次 · ${r.recipeCount} 條配方 ·
+              <span class="pr-score">${r.score.toFixed(1)}</span>
+            </span>
+          </div>
+        `
+      )
+      .join("");
+
+    browseList.querySelectorAll(".priority-row").forEach((row) => {
+      row.addEventListener("click", () => {
+        searchInput.value = row.dataset.name;
+        runSearch();
+        resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+  }
+
+  function renderCurrentBrowseMode() {
+    if (browseMode === "priority") renderPriorityList();
+    else renderBrowseList();
+  }
+
+  modeBrowseBtn.addEventListener("click", () => {
+    browseMode = "browse";
+    modeBrowseBtn.classList.add("active");
+    modePriorityBtn.classList.remove("active");
+    browseEmojiFilter.style.display = "";
+    priorityHint.style.display = "none";
+    renderCurrentBrowseMode();
+  });
+  modePriorityBtn.addEventListener("click", () => {
+    browseMode = "priority";
+    modePriorityBtn.classList.add("active");
+    modeBrowseBtn.classList.remove("active");
+    browseEmojiFilter.style.display = "none";
+    priorityHint.style.display = "block";
+    renderCurrentBrowseMode();
+  });
 
   // 把使用者貼的一串文字拆成一個個 emoji 字元（用 Array.from 依 Unicode code point 拆，
   // 大部分常見 emoji 都能正確處理；順便濾掉空白）
@@ -1187,11 +1326,11 @@
 
   browseFilter.addEventListener("input", () => {
     browseLimit = BROWSE_PAGE_SIZE; // 重新輸入關鍵字時，顯示筆數重置
-    renderBrowseList();
+    renderCurrentBrowseMode();
   });
   browseEmojiFilter.addEventListener("input", () => {
     browseLimit = BROWSE_PAGE_SIZE;
-    renderBrowseList();
+    renderCurrentBrowseMode();
   });
 
   fileInput.addEventListener("change", (e) => {
@@ -1605,8 +1744,12 @@
   }
 
   function buildStepList(target, solved) {
-    const { cost: settledCost } = solved;
-    // 收集目標往下追溯到的所有節點（每個造物只列一次，依步數排序）
+    // 收集目標往下追溯到的所有節點，遞迴的寫法本身（子節點一定會先 push 進 order，
+    // 父節點才會 push）就已經保證是合法的依賴順序了，不需要再額外排序。
+    // 之前這裡多了一道「依演算法原始成本高低」的排序，但那個成本在使用者手動切換過
+    // 等價路線、或自動優化換過配方之後就已經過時、不準了，會把正確的先後順序打亂
+    // （曾經真的發生過：查詢「馬爾他」結果最後一步變成顯示「歐洲」的合成，
+    //  因為「歐洲」的原始成本剛好被排到後面，即使它其實是馬爾他的材料）。
     const visited = new Set();
     const order = [];
     function walk(name) {
@@ -1623,11 +1766,6 @@
       order.push(name);
     }
     walk(target);
-    order.sort((x, y) => {
-      const cx = settledCost.has(x) ? settledCost.get(x) : Infinity;
-      const cy = settledCost.has(y) ? settledCost.get(y) : Infinity;
-      return cx - cy;
-    });
     return order;
   }
 
@@ -1843,10 +1981,24 @@
 
   let lastResult = null; // {target, solved, opts}
 
+  // 產生「精確到分鐘」的時間戳記，例如 20260808_2145
+  function timestampTag() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return (
+      d.getFullYear() +
+      pad(d.getMonth() + 1) +
+      pad(d.getDate()) +
+      "_" +
+      pad(d.getHours()) +
+      pad(d.getMinutes())
+    );
+  }
+
   downloadBtn.addEventListener("click", () => {
     if (!lastResult) return;
     const text = buildPlainText(lastResult.target, lastResult.solved);
-    downloadText(`合成路線_${lastResult.target}.txt`, text);
+    downloadText(`合成路線_${lastResult.target}_${timestampTag()}.txt`, text);
   });
 
   function runSearch() {
@@ -1943,7 +2095,9 @@
   // 會自動失敗、什麼都不做，回到原本手動上傳的模式，不影響本機使用。
   (function tryAutoLoad() {
     if (location.protocol === "file:") return; // 本機開啟，不嘗試
-    fetch("./recipes_data.json", { cache: "no-store" })
+    // 網址加上時間戳記當作參數，強迫瀏覽器（尤其是存成主畫面捷徑的手機瀏覽器）
+    // 把每次請求都當成全新的、不去用任何快取版本，確保抓到的一定是最新資料
+    fetch("./recipes_data.json?t=" + Date.now(), { cache: "no-store" })
       .then((res) => (res.ok ? res.text() : Promise.reject()))
       .then((text) => {
         dropLabel.textContent = "已自動載入 recipes_data.json";
