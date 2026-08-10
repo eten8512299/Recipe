@@ -730,6 +730,14 @@
     color: var(--gold);
     font-weight: 700;
   }
+  .priority-row .pr-owned-badge {
+    background: var(--wind);
+    color: #14111a;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+    margin-right: 8px;
+  }
 
   .tree-root { padding: 4px 0; }
   .tree-node { position: relative; }
@@ -850,6 +858,18 @@
             <button id="forward-btn" type="button" disabled style="width:100%;">查詢</button>
             <div id="forward-result" class="forward-result"></div>
           </div>
+
+          <hr class="section-divider" />
+
+          <div>
+            <div class="hint-label">已擁有材料：匯入你倉庫裡的素材，查詢時會自動當作免費起點</div>
+            <label class="drop-zone" id="owned-drop-zone" style="padding:14px;font-size:13px;">
+              <input type="file" id="owned-file-input" accept=".json" disabled />
+              <span id="owned-drop-label">點此選擇匯出的素材清單 JSON</span>
+            </label>
+            <div class="status-line" id="owned-status" style="margin-top:8px;">尚未匯入</div>
+            <button id="owned-clear-btn" type="button" class="secondary" style="width:100%;margin-top:8px;" disabled>清空已擁有材料</button>
+          </div>
         </div>
 
         <div class="panel panel-browse">
@@ -860,6 +880,7 @@
           <div class="browse-mode-toggle">
             <button type="button" id="mode-browse" class="active">依步數瀏覽</button>
             <button type="button" id="mode-priority">優先補強清單</button>
+            <button type="button" id="mode-terminal">末端造物</button>
           </div>
           <input
             type="text"
@@ -879,6 +900,9 @@
           />
           <div id="priority-hint" style="display:none;font-size:11.5px;color:var(--text-dim);font-family:ui-monospace,monospace;margin-bottom:10px;line-height:1.6;">
             列出被引用超過 10 次、但目前已知配方數很少的詞條，依「引用次數 ÷ 配方數」由高到低排序——這些是補一條配方就能讓最多東西受益的地方。
+          </div>
+          <div id="terminal-hint" style="display:none;font-size:11.5px;color:var(--text-dim);font-family:ui-monospace,monospace;margin-bottom:10px;line-height:1.6;">
+            列出從沒被當作任何配方材料使用過的造物——做出來之後純粹是終點，不會再拿去合成別的東西。如果有匯入已擁有材料，你目前真的擁有的會特別標示出來，可以考慮清掉。
           </div>
           <div id="browse-list" class="browse-list"></div>
         </div>
@@ -913,6 +937,9 @@
   };
 
   let BASE_ELEMENTS = ["火", "水", "土", "雷", "風"];
+  // 建立一次中文排序比較器重複使用，比每次呼叫 localeCompare() 快很多，
+  // 造物數量一多（十幾萬筆等級）差異會很明顯
+  const zhCollator = new Intl.Collator("zh-Hant");
   const CHEAT_TOOLS = ["去尾", "去首字", "取首字", "取尾字", "去除前綴", "去除後綴", "相反", "反向"];
   let cheatMode = false;
   let recipes = [];       // [{a,b,result}]
@@ -975,11 +1002,17 @@
   const forwardMat2 = document.getElementById("forward-mat2");
   const forwardBtn = document.getElementById("forward-btn");
   const forwardResult = document.getElementById("forward-result");
+  const ownedFileInput = document.getElementById("owned-file-input");
+  const ownedDropLabel = document.getElementById("owned-drop-label");
+  const ownedStatus = document.getElementById("owned-status");
+  const ownedClearBtn = document.getElementById("owned-clear-btn");
   const browseFilter = document.getElementById("browse-filter");
   const browseEmojiFilter = document.getElementById("browse-emoji-filter");
   const modeBrowseBtn = document.getElementById("mode-browse");
   const modePriorityBtn = document.getElementById("mode-priority");
+  const modeTerminalBtn = document.getElementById("mode-terminal");
   const priorityHint = document.getElementById("priority-hint");
+  const terminalHint = document.getElementById("terminal-hint");
   const browseList = document.getElementById("browse-list");
   const browseCount = document.getElementById("browse-count");
 
@@ -1078,6 +1111,117 @@
   }
 
   // ---------- 載入資料 ----------
+  // ---------- IndexedDB 快取：跳過重複計算，加快手機上重新載入的速度 ----------
+  // 原理：把讀檔+建索引+跑演算法的最終結果整包存進手機瀏覽器本機，
+  // 下次打開時先比對「資料內容有沒有變過」，沒變就直接把算好的結果讀出來用，
+  // 完全跳過重新計算，省下最花時間的那一步（不是省下載時間，資料還是每次都會重新抓最新的，
+  // 省的是抓到之後「解析+建索引+跑最短路徑演算法」這幾秒到十幾秒的重複運算）。
+  const IDB_NAME = "pillars_pathfinder_cache";
+  const IDB_STORE = "solved";
+  const IDB_KEY = "latest";
+
+  function openCacheDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        req.result.createObjectStore(IDB_STORE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function idbGet(key) {
+    try {
+      const db = await openCacheDB();
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, "readonly");
+        const req = tx.objectStore(IDB_STORE).get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    } catch (e) {
+      return undefined;
+    }
+  }
+  async function idbSet(key, value) {
+    try {
+      const db = await openCacheDB();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, "readwrite");
+        tx.objectStore(IDB_STORE).put(value, key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (e) {
+      /* 快取存不進去就算了，不影響主要功能，正常算一次就好 */
+    }
+  }
+  async function hashText(text) {
+    const enc = new TextEncoder().encode(text);
+    const digest = await crypto.subtle.digest("SHA-256", enc);
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  // 快取的內容除了資料本身，還要考慮「基本元素/偷吃步模式」這些會影響演算結果的設定，
+  // 全部一起算進 hash 裡，任何一個變了都會讓快取失效、重新計算
+  async function computeCacheHash(rawText) {
+    const configPart = JSON.stringify({
+      base: BASE_ELEMENTS,
+      cheat: cheatMode,
+      cheatTools: CHEAT_TOOLS,
+    });
+    return await hashText(rawText + "|" + configPart);
+  }
+
+  async function tryLoadFromCache(hash) {
+    const cached = await idbGet(IDB_KEY);
+    if (!cached || cached.hash !== hash) return false;
+    try {
+      solveBase = cached.solveBase;
+      solveAny = cached.solveAny;
+      return !!(solveBase && solveAny);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function saveToCache(hash) {
+    // 背景存檔即可，不用等它存完才讓使用者繼續操作；
+    // 只存最貴的「跑最短路徑演算法」結果，索引資料（itemIndex等）本身重新建立很快，不用存
+    idbSet(IDB_KEY, { hash, solveBase, solveAny });
+  }
+
+  let lastLoadedRawText = null; // 記住最後一次成功載入的原始文字內容，切換偷吃步模式時也能拿來查快取
+
+  async function resolveIndexAndSolve(rawText) {
+    console.time("[perf] buildIndices");
+    const itemSet = buildIndices(); // 索引資料每次都重新建立，這部分本來就很快
+    console.timeEnd("[perf] buildIndices");
+    let usedCache = false;
+    if (rawText) {
+      try {
+        console.time("[perf] cache check");
+        const hash = await computeCacheHash(rawText);
+        usedCache = await tryLoadFromCache(hash);
+        console.timeEnd("[perf] cache check");
+        if (!usedCache) {
+          console.time("[perf] runSolve");
+          runSolve(itemSet);
+          console.timeEnd("[perf] runSolve");
+          saveToCache(hash);
+        }
+        return;
+      } catch (e) {
+        /* 快取機制本身出問題的話，就正常算一次，不影響主要功能 */
+      }
+    }
+    console.time("[perf] runSolve");
+    runSolve(itemSet);
+    console.timeEnd("[perf] runSolve");
+  }
+
   function loadFromText(text, filename) {
     try {
       console.time("[perf] parse");
@@ -1097,7 +1241,8 @@
       if (!parsed.length) throw new Error("沒有解析出任何有效的配方資料");
 
       recipes = parsed;
-      afterLoad();
+      lastLoadedRawText = text;
+      afterLoad(text);
     } catch (e) {
       loadStatus.textContent = "載入失敗：" + e.message;
       loadStatus.className = "status-line err";
@@ -1112,10 +1257,8 @@
     loadStatus.className = "status-line ok";
   }
 
-  function afterLoad() {
-    console.time("[perf] buildIndexAndSolve");
-    buildIndexAndSolve();
-    console.timeEnd("[perf] buildIndexAndSolve");
+  async function afterLoad(rawText) {
+    await resolveIndexAndSolve(rawText);
     updateLoadStatusText();
     searchInput.disabled = false;
     searchBtn.disabled = false;
@@ -1124,6 +1267,7 @@
     forwardMat1.disabled = false;
     forwardMat2.disabled = false;
     forwardBtn.disabled = false;
+    ownedFileInput.disabled = false;
     console.time("[perf] datalist populate");
     updateDatalist("");
     console.timeEnd("[perf] datalist populate");
@@ -1134,11 +1278,11 @@
   }
 
   const cheatModeToggle = document.getElementById("cheat-mode-toggle");
-  cheatModeToggle.addEventListener("change", () => {
+  cheatModeToggle.addEventListener("change", async () => {
     cheatMode = cheatModeToggle.checked;
     renderElementChips();
     if (!recipes.length) return; // 還沒載入資料，只是先記住這個設定
-    buildIndexAndSolve();
+    await resolveIndexAndSolve(lastLoadedRawText);
     updateLoadStatusText();
     browseLimit = BROWSE_PAGE_SIZE;
     renderCurrentBrowseMode();
@@ -1148,7 +1292,7 @@
   // ---------- 瀏覽清單：列出所有完全回溯到基本元素的造物 ----------
   let browseLimit = 300;
   const BROWSE_PAGE_SIZE = 300;
-  let browseMode = "browse"; // "browse" | "priority"
+  let browseMode = "browse"; // "browse" | "priority" | "terminal"
 
   // ---------- 優先補強清單：被引用很多次、但目前已知配方數很少的詞條 ----------
   const PRIORITY_MIN_USAGE = 10; // 引用次數門檻，要 > 這個數字才有資格上榜
@@ -1206,8 +1350,87 @@
     });
   }
 
+  // ---------- 末端造物：從沒被當作任何配方材料使用過的造物 ----------
+  function computeTerminalList() {
+    if (!itemIndex || !allItems) return [];
+    const rows = [];
+    for (const name of allItems) {
+      // 基本元素、偷吃步工具都不是真正的「造物」，不列入末端造物清單
+      // （偷吃步工具就算沒開偷吃步模式，本來就不算你倉庫裡佔位置的東西）
+      if (isBase(name) || CHEAT_TOOLS.includes(name)) continue;
+      const usageCount = (itemIndex.get(name) || []).length;
+      if (usageCount > 0) continue; // 有被用過，不是末端
+      const recipeCount = (resultIndex.get(name) || []).length;
+      rows.push({ name, recipeCount, owned: ownedSet.has(name) });
+    }
+    // 你目前真的擁有的排最前面（最值得馬上關注），其餘按名稱排序
+    rows.sort((a, b) => (b.owned - a.owned) || zhCollator.compare(a.name, b.name));
+    return rows;
+  }
+
+  function renderTerminalList() {
+    const filterText = browseFilter.value.trim();
+    const allRows = computeTerminalList().filter(
+      (r) => !filterText || r.name.includes(filterText)
+    );
+    const ownedCount = allRows.filter((r) => r.owned).length;
+
+    browseCount.textContent = ownedSet.size
+      ? `（共 ${allRows.length} 項，其中 ${ownedCount} 項你目前擁有）`
+      : `（共 ${allRows.length} 項；匯入已擁有材料後，會標示出你目前真的持有哪些）`;
+
+    if (!allRows.length) {
+      browseList.innerHTML = `<div class="browse-empty">目前沒有符合條件的末端造物</div>`;
+      return;
+    }
+
+    const truncatedCount = Math.max(0, allRows.length - browseLimit);
+    const rows = allRows.slice(0, browseLimit);
+
+    let html = rows
+      .map(
+        (r) => `
+          <div class="priority-row" data-name="${escapeHtml(r.name)}">
+            <span class="pr-name">${r.owned ? '<span class="pr-owned-badge">你有這個</span>' : ""}${withIcon(r.name)}</span>
+            <span class="pr-stats">${r.recipeCount} 條已知配方</span>
+          </div>
+        `
+      )
+      .join("");
+
+    if (truncatedCount > 0) {
+      html += `
+        <div class="browse-empty">
+          還有 ${truncatedCount} 項未顯示，可以輸入關鍵字縮小範圍，
+          或
+          <button type="button" id="terminal-load-more" class="secondary" style="margin-top:8px;">
+            繼續載入下 ${Math.min(BROWSE_PAGE_SIZE, truncatedCount)} 項
+          </button>
+        </div>
+      `;
+    }
+    browseList.innerHTML = html;
+
+    browseList.querySelectorAll(".priority-row").forEach((row) => {
+      row.addEventListener("click", () => {
+        searchInput.value = row.dataset.name;
+        runSearch();
+        resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+
+    const loadMoreBtn = document.getElementById("terminal-load-more");
+    if (loadMoreBtn) {
+      loadMoreBtn.addEventListener("click", () => {
+        browseLimit += BROWSE_PAGE_SIZE;
+        renderTerminalList();
+      });
+    }
+  }
+
   function renderCurrentBrowseMode() {
     if (browseMode === "priority") renderPriorityList();
+    else if (browseMode === "terminal") renderTerminalList();
     else renderBrowseList();
   }
 
@@ -1215,16 +1438,31 @@
     browseMode = "browse";
     modeBrowseBtn.classList.add("active");
     modePriorityBtn.classList.remove("active");
+    modeTerminalBtn.classList.remove("active");
     browseEmojiFilter.style.display = "";
     priorityHint.style.display = "none";
+    terminalHint.style.display = "none";
     renderCurrentBrowseMode();
   });
   modePriorityBtn.addEventListener("click", () => {
     browseMode = "priority";
     modePriorityBtn.classList.add("active");
     modeBrowseBtn.classList.remove("active");
+    modeTerminalBtn.classList.remove("active");
     browseEmojiFilter.style.display = "none";
     priorityHint.style.display = "block";
+    terminalHint.style.display = "none";
+    renderCurrentBrowseMode();
+  });
+  modeTerminalBtn.addEventListener("click", () => {
+    browseMode = "terminal";
+    modeTerminalBtn.classList.add("active");
+    modeBrowseBtn.classList.remove("active");
+    modePriorityBtn.classList.remove("active");
+    browseEmojiFilter.style.display = "none";
+    priorityHint.style.display = "none";
+    terminalHint.style.display = "block";
+    browseLimit = BROWSE_PAGE_SIZE;
     renderCurrentBrowseMode();
   });
 
@@ -1252,7 +1490,7 @@
       .filter(([name]) => !isBase(name))
       .filter(([name]) => !filterText || name.includes(filterText))
       .filter(([name]) => matchesEmojiFilter(name, emojiChars))
-      .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0], "zh-Hant"));
+      .sort((a, b) => a[1] - b[1] || zhCollator.compare(a[0], b[0]));
 
     browseCount.textContent = `（共 ${rough.length} 項，完全回溯到基本元素）`;
 
@@ -1267,7 +1505,7 @@
     // 只針對實際要顯示的這一批，算出正確的「不重複配方數」
     // （材料不會消失，所以用真正去重過的步驟數，而不是估計值）
     const withRealSteps = shown.map(([name]) => [name, buildStepList(name, solveBase).length]);
-    withRealSteps.sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0], "zh-Hant"));
+    withRealSteps.sort((a, b) => a[1] - b[1] || zhCollator.compare(a[0], b[0]));
 
     // 依步數分組，做成一顆顆氣泡
     const groups = new Map();
@@ -1369,7 +1607,7 @@
     if (vals.length) {
       BASE_ELEMENTS = vals;
       renderElementChips();
-      if (recipes.length) afterLoad();
+      if (recipes.length) afterLoad(lastLoadedRawText);
     }
   });
 
@@ -1473,7 +1711,7 @@
     return { cost: settledCost, choice: recipeChoice, ties };
   }
 
-  function buildIndexAndSolve() {
+  function buildIndices() {
     itemIndex = new Map(); // item -> [{mats,result}]
     forwardIndex = new Map(); // "matA|matB" 或 "matA" -> Set(result)
     resultIndex = new Map(); // result -> [{mats,result}]，這個造物所有已知配方（不管能不能回溯到元素）
@@ -1510,8 +1748,13 @@
     }
     for (const el of BASE_ELEMENTS) itemSet.add(el);
     for (const t of CHEAT_TOOLS) itemSet.add(t);
-    allItems = Array.from(itemSet).sort((a, b) => a.localeCompare(b, "zh-Hant"));
+    console.time("[perf] buildIndices sort");
+    allItems = Array.from(itemSet).sort(zhCollator.compare);
+    console.timeEnd("[perf] buildIndices sort");
+    return itemSet;
+  }
 
+  function runSolve(itemSet) {
     // 完全解：只有基本元素（若開啟偷吃步模式，再加上那 6 個破格工具）可以當起點
     const baseLeafSet = currentBaseLeafSet();
     solveBase = solveShortestPath(baseLeafSet);
@@ -1523,6 +1766,11 @@
       if (!resultItems.has(name)) impliedLeaves.add(name);
     }
     solveAny = solveShortestPath(impliedLeaves);
+  }
+
+  function buildIndexAndSolve() {
+    const itemSet = buildIndices();
+    runSolve(itemSet);
   }
 
   // ---------- 正向查詢：輸入材料 → 看能合成/萃取出什麼 ----------
@@ -1625,6 +1873,59 @@
   let ownedSet = new Set(); // 使用者手動點選「已經擁有」的材料，暫時當作免費的葉節點
   let autoOptimizations = new Map(); // 演算法自動優化找到的替代配方，item -> mats（跟使用者手動選的分開存）
 
+  // ---------- 匯入已擁有材料（從遊戲工坊素材櫃匯出的清單） ----------
+  function updateOwnedStatus() {
+    ownedStatus.textContent = ownedSet.size > 0 ? `已匯入 ${ownedSet.size} 個已擁有材料` : "尚未匯入";
+    ownedStatus.className = ownedSet.size > 0 ? "status-line ok" : "status-line";
+    ownedClearBtn.disabled = ownedSet.size === 0;
+  }
+
+  function importOwnedFromJSON(text, filename) {
+    try {
+      const data = JSON.parse(text);
+      if (!Array.isArray(data)) throw new Error("內容必須是陣列");
+      let count = 0;
+      for (const item of data) {
+        let name, icon;
+        if (typeof item === "string") {
+          name = item.trim();
+        } else if (item && typeof item === "object") {
+          name = (item.name || "").trim();
+          icon = item.icon;
+        }
+        if (!name) continue;
+        ownedSet.add(name);
+        if (icon && iconMap && !iconMap.has(name)) iconMap.set(name, icon);
+        count++;
+      }
+      ownedDropLabel.textContent = "已選擇檔案：" + filename;
+      updateOwnedStatus();
+      if (lastResult) reRenderCurrentResult(); // 如果目前正顯示查詢結果，順便重新整理，反映新匯入的已擁有材料
+      if (browseMode === "terminal") renderCurrentBrowseMode(); // 末端造物清單的「你有這個」標籤也要跟著更新
+    } catch (e) {
+      ownedStatus.textContent = "匯入失敗：" + e.message;
+      ownedStatus.className = "status-line err";
+    }
+  }
+
+  ownedFileInput.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => importOwnedFromJSON(ev.target.result, file.name);
+    reader.readAsText(file, "UTF-8");
+  });
+
+  ownedClearBtn.addEventListener("click", () => {
+    if (!ownedSet.size) return;
+    if (confirm(`確定要清空目前已匯入/標記的 ${ownedSet.size} 個已擁有材料嗎？`)) {
+      ownedSet.clear();
+      updateOwnedStatus();
+      if (lastResult) reRenderCurrentResult();
+      if (browseMode === "terminal") renderCurrentBrowseMode();
+    }
+  });
+
   // 取得某個造物實際要用的配方：使用者手動選的優先，再來是自動優化找到的，最後才是演算法預設選擇
   function getChoice(name, solved) {
     if (routeOverrides.has(name)) return { mats: routeOverrides.get(name) };
@@ -1689,14 +1990,20 @@
         // 並依材料成本高低排序（成本低的代表大概率能共用到已經做出來的東西，
         // 比較可能是有效的改善方向）。造物很受歡迎、候選一多，
         // 才不會被排在後面、但其實更好的選項卡在數量上限外面試不到。
+        //
+        // 這裡的成本估算要跟核心演算法用同一套邏輯：自我合成（A+A→B）材料不會消失，
+        // 只需要做一次 A，不能算兩份 A 的成本，不然這種候選會被誤判成很貴、排到後面，
+        // 甚至排不進上限內，導致優化器根本沒機會試到它。
+        function estimateAltCost(mats) {
+          if (mats.length === 1) return solved.cost.get(mats[0]) || 0;
+          if (mats[0] === mats[1]) return solved.cost.get(mats[0]) || 0;
+          return (solved.cost.get(mats[0]) || 0) + (solved.cost.get(mats[1]) || 0);
+        }
+
         const candidates = alternatives
           .filter((alt) => matsKey(alt.mats) !== currentKey)
           .filter((alt) => alt.mats.every((m) => solved.cost.has(m) || ownedSet.has(m)))
-          .sort((a, b) => {
-            const costA = a.mats.reduce((s, m) => s + (solved.cost.get(m) || 0), 0);
-            const costB = b.mats.reduce((s, m) => s + (solved.cost.get(m) || 0), 0);
-            return costA - costB;
-          })
+          .sort((a, b) => estimateAltCost(a.mats) - estimateAltCost(b.mats))
           .slice(0, OPTIMIZE_MAX_ALTS_PER_ITEM);
 
         for (const alt of candidates) {
@@ -1968,7 +2275,9 @@
   }
 
   function downloadText(filename, content) {
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    // 加上 UTF-8 BOM（開頭那個 \uFEFF），有些手機的純文字瀏覽 App
+    // 沒看到這個標記時，遇到中文內容容易誤判編碼、顯示成亂碼
+    const blob = new Blob(["\uFEFF" + content], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
