@@ -812,7 +812,7 @@
           <span class="toggle-slider"></span>
         </span>
         <span class="cheat-toggle-label">
-          偷吃步模式：把「去尾／去首字／取首字／取尾字／去除前綴／去除後綴／相反／反向」也當作基本元素
+          偷吃步模式：把「去尾／去首字／取首字／取尾字／去除前綴／去除後綴／相反／反向／加一／減一／下一個／前一個」也當作基本元素
         </span>
       </label>
     </header>
@@ -855,7 +855,22 @@
               <input type="text" id="forward-mat1" list="item-list" placeholder="材料 A" disabled />
               <input type="text" id="forward-mat2" list="item-list" placeholder="材料 B（留空＝查萃取）" disabled />
             </div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-dim);margin-bottom:8px;cursor:pointer;">
+              <input type="checkbox" id="forward-owned-only" disabled />
+              只看能用「已擁有材料」搭配的組合（只填材料 A 時才有作用）
+            </label>
+            <input
+              type="text"
+              id="forward-result-filter"
+              class="base-edit"
+              placeholder="結果需包含（留空=不限制，例如輸入材料本身找相關衍生物）"
+              style="margin-bottom:8px;"
+              disabled
+            />
             <button id="forward-btn" type="button" disabled style="width:100%;">查詢</button>
+            <button id="forward-brainstorm-btn" type="button" class="secondary" disabled style="width:100%;margin-top:6px;">
+              🧪 列出跟已擁有材料的所有搭配（含還沒人試過的）
+            </button>
             <div id="forward-result" class="forward-result"></div>
           </div>
 
@@ -863,12 +878,25 @@
 
           <div>
             <div class="hint-label">已擁有材料：匯入你倉庫裡的素材，查詢時會自動當作免費起點</div>
+            <div style="margin-bottom:8px;">
+              <select id="inventory-select" class="base-edit" disabled style="width:100%;">
+                <option value="">不套用（純查詢，不代入任何包包）</option>
+              </select>
+            </div>
+            <input
+              type="text"
+              id="inventory-label-input"
+              class="base-edit"
+              placeholder="帳號名稱（例如：帳號1），匯入時會存成這個名字"
+              style="margin-bottom:8px;"
+              disabled
+            />
             <label class="drop-zone" id="owned-drop-zone" style="padding:14px;font-size:13px;">
               <input type="file" id="owned-file-input" accept=".json" disabled />
-              <span id="owned-drop-label">點此選擇匯出的素材清單 JSON</span>
+              <span id="owned-drop-label">選擇匯出的素材清單 JSON，存成上面填的帳號名稱</span>
             </label>
-            <div class="status-line" id="owned-status" style="margin-top:8px;">尚未匯入</div>
-            <button id="owned-clear-btn" type="button" class="secondary" style="width:100%;margin-top:8px;" disabled>清空已擁有材料</button>
+            <div class="status-line" id="owned-status" style="margin-top:8px;">尚未套用任何帳號</div>
+            <button id="owned-delete-account-btn" type="button" class="secondary" style="width:100%;margin-top:8px;" disabled>刪除目前選中的帳號資料</button>
           </div>
         </div>
 
@@ -940,7 +968,7 @@
   // 建立一次中文排序比較器重複使用，比每次呼叫 localeCompare() 快很多，
   // 造物數量一多（十幾萬筆等級）差異會很明顯
   const zhCollator = new Intl.Collator("zh-Hant");
-  const CHEAT_TOOLS = ["去尾", "去首字", "取首字", "取尾字", "去除前綴", "去除後綴", "相反", "反向"];
+  const CHEAT_TOOLS = ["去尾", "去首字", "取首字", "取尾字", "去除前綴", "去除後綴", "相反", "反向", "加一", "減一", "下一個", "前一個"];
   let cheatMode = false;
   let recipes = [];       // [{a,b,result}]
   let itemIndex = null;   // ingredient name -> [recipe,...]
@@ -1002,10 +1030,15 @@
   const forwardMat2 = document.getElementById("forward-mat2");
   const forwardBtn = document.getElementById("forward-btn");
   const forwardResult = document.getElementById("forward-result");
+  const forwardOwnedOnly = document.getElementById("forward-owned-only");
+  const forwardBrainstormBtn = document.getElementById("forward-brainstorm-btn");
+  const forwardResultFilter = document.getElementById("forward-result-filter");
   const ownedFileInput = document.getElementById("owned-file-input");
   const ownedDropLabel = document.getElementById("owned-drop-label");
   const ownedStatus = document.getElementById("owned-status");
-  const ownedClearBtn = document.getElementById("owned-clear-btn");
+  const ownedDeleteAccountBtn = document.getElementById("owned-delete-account-btn");
+  const inventorySelect = document.getElementById("inventory-select");
+  const inventoryLabelInput = document.getElementById("inventory-label-input");
   const browseFilter = document.getElementById("browse-filter");
   const browseEmojiFilter = document.getElementById("browse-emoji-filter");
   const modeBrowseBtn = document.getElementById("mode-browse");
@@ -1253,6 +1286,7 @@
     loadStatus.textContent =
       `已載入 ${recipes.length} 筆配方，索引出 ${allItems.length} 種造物，` +
       `完全回溯到基本元素的有 ${solveBase.cost.size} 種，加上暫代起點後可達 ${solveAny.cost.size} 種` +
+      (circularRecipeCount > 0 ? `（已自動忽略 ${circularRecipeCount} 筆材料包含自己的循環配方）` : "") +
       (cheatMode ? "（偷吃步模式已開啟）" : "");
     loadStatus.className = "status-line ok";
   }
@@ -1267,7 +1301,12 @@
     forwardMat1.disabled = false;
     forwardMat2.disabled = false;
     forwardBtn.disabled = false;
+    forwardOwnedOnly.disabled = false;
+    forwardBrainstormBtn.disabled = false;
+    forwardResultFilter.disabled = false;
     ownedFileInput.disabled = false;
+    inventorySelect.disabled = false;
+    inventoryLabelInput.disabled = false;
     console.time("[perf] datalist populate");
     updateDatalist("");
     console.timeEnd("[perf] datalist populate");
@@ -1711,6 +1750,8 @@
     return { cost: settledCost, choice: recipeChoice, ties };
   }
 
+  let circularRecipeCount = 0; // 這次載入濾掉了幾筆「材料裡包含自己」的循環配方，純粹統計用
+
   function buildIndices() {
     itemIndex = new Map(); // item -> [{mats,result}]
     forwardIndex = new Map(); // "matA|matB" 或 "matA" -> Set(result)
@@ -1718,12 +1759,22 @@
     iconMap = new Map(); // 造物名稱 -> emoji（可能是好幾個符號組成的字串），只是顯示/搜尋用，不影響任何比對邏輯
     const itemSet = new Set();
     resultItems = new Set();
+    circularRecipeCount = 0;
+    autoPickCache = new Map(); // resultIndex 要重建了，之前挑好的自動展開結果也一併失效重來
 
     function noteIcon(name, icon) {
       if (icon && !iconMap.has(name)) iconMap.set(name, icon);
     }
 
     for (const r of recipes) {
+      // 材料裡如果包含自己（例如「人類+物種→人類」），代表要先擁有這個東西才能做出這個東西，
+      // 邏輯上根本不可能是「從零開始怎麼做出它」的有效路徑，直接整筆忽略、不放進任何索引，
+      // 這樣它就不會出現在查詢結果、所有已知配方清單、正向查詢或優化器候選裡的任何地方。
+      if (r.mats.includes(r.result)) {
+        circularRecipeCount++;
+        continue;
+      }
+
       for (const m of r.mats) itemSet.add(m);
       itemSet.add(r.result);
       resultItems.add(r.result);
@@ -1811,10 +1862,34 @@
       return;
     }
 
-    const extractRecipes = related.filter((r) => r.mats.length === 1);
-    const combineRecipes = related.filter((r) => r.mats.length === 2);
+    const ownedOnly = forwardOwnedOnly.checked;
+    const resultFilterText = forwardResultFilter.value.trim();
+
+    let extractRecipes = related.filter((r) => r.mats.length === 1);
+    let combineRecipes = related.filter((r) => r.mats.length === 2);
+
+    if (resultFilterText) {
+      extractRecipes = extractRecipes.filter((r) => r.result.includes(resultFilterText));
+      combineRecipes = combineRecipes.filter((r) => r.result.includes(resultFilterText));
+    }
+    if (ownedOnly) {
+      // 萃取沒有「搭配的另一個材料」這個概念，勾選只看已擁有材料搭配時，萃取這類就不列了
+      extractRecipes = [];
+      combineRecipes = combineRecipes.filter((r) => {
+        const partner = r.mats[0] === a ? r.mats[1] : r.mats[0];
+        return ownedSet.has(partner);
+      });
+    }
 
     let html = "";
+
+    if (!extractRecipes.length && !combineRecipes.length) {
+      const reasons = [];
+      if (resultFilterText) reasons.push(`結果包含「${escapeHtml(resultFilterText)}」`);
+      if (ownedOnly) reasons.push("材料是已擁有的");
+      forwardResult.innerHTML = `<div class="fr-empty">「${escapeHtml(a)}」目前沒有符合條件（${reasons.join("、") || "無篩選"}）的配方</div>`;
+      return;
+    }
 
     if (extractRecipes.length) {
       const extractResults = Array.from(new Set(extractRecipes.map((r) => r.result)));
@@ -1829,7 +1904,8 @@
       const pills = combineRecipes
         .map((r) => {
           const partner = r.mats[0] === a ? r.mats[1] : r.mats[0];
-          return `<span class="fr-pill" data-name="${escapeHtml(r.result)}">${withIcon(a)}+${withIcon(partner)} → ${withIcon(r.result)}<span class="fr-arrow">↗</span></span>`;
+          const ownedTag = ownedSet.has(partner) ? `<span class="base-tag" style="background:var(--wind);">已擁有</span>` : "";
+          return `<span class="fr-pill" data-name="${escapeHtml(r.result)}">${withIcon(a)}+${withIcon(partner)}${ownedTag} → ${withIcon(r.result)}<span class="fr-arrow">↗</span></span>`;
         })
         .join("");
       html += pills;
@@ -1837,6 +1913,73 @@
 
     forwardResult.innerHTML = html;
     bindForwardPills();
+  }
+
+  // ---------- 探索性清單：跟已擁有材料的所有搭配，含還沒人試過的組合 ----------
+  // 跟上面的「正向查詢」不一樣：正向查詢只找資料庫裡「已經有紀錄」的配方，
+  // 這個功能是把已擁有材料全部拿來跟指定材料配對列出來，不管有沒有人試過，
+  // 讓你知道哪些是還沒人嘗試過、值得自己去遊戲裡試試看的組合。
+  function runOwnedBrainstorm() {
+    const a = forwardMat1.value.trim();
+    if (!a) {
+      forwardResult.innerHTML = `<div class="fr-empty">先在「材料 A」輸入一個造物名稱</div>`;
+      return;
+    }
+    if (!ownedSet.size) {
+      forwardResult.innerHTML = `<div class="fr-empty">目前沒有套用任何已擁有材料的帳號，請先在左邊「已擁有材料」選一個帳號</div>`;
+      return;
+    }
+
+    const resultFilterText = forwardResultFilter.value.trim();
+    const ownedItems = Array.from(ownedSet)
+      .filter((item) => item !== a)
+      .sort((x, y) => zhCollator.compare(x, y));
+
+    const known = [];
+    const untried = [];
+    for (const item of ownedItems) {
+      const key = forwardKey([a, item]);
+      const results = forwardIndex ? forwardIndex.get(key) : null;
+      if (results && results.size) {
+        const resultList = Array.from(results);
+        const matched = resultFilterText ? resultList.filter((r) => r.includes(resultFilterText)) : resultList;
+        if (matched.length) known.push({ item, results: matched });
+      } else {
+        untried.push(item);
+      }
+    }
+
+    if (!known.length && !untried.length) {
+      forwardResult.innerHTML = `<div class="fr-empty">已擁有材料裡沒有可以跟「${escapeHtml(a)}」配對的項目</div>`;
+      return;
+    }
+
+    let html = "";
+    if (known.length) {
+      html += `<div class="fr-label">✅ 已知配方（共 ${known.length} 種）</div>`;
+      html += known
+        .map(({ item, results }) =>
+          results
+            .map(
+              (r) =>
+                `<span class="fr-pill" data-name="${escapeHtml(r)}">${withIcon(a)}+${withIcon(item)} → ${withIcon(r)}<span class="fr-arrow">↗</span></span>`
+            )
+            .join("")
+        )
+        .join("");
+    }
+    if (untried.length) {
+      html += `<div class="fr-label" style="margin-top:${known.length ? "12px" : "0"};">❓ 還沒人試過（共 ${untried.length} 種，可以去遊戲裡試試看）</div>`;
+      html += untried
+        .map(
+          (item) =>
+            `<span class="fr-pill" style="cursor:default;">${withIcon(a)}+${withIcon(item)} → <span style="color:var(--text-dim);">？</span></span>`
+        )
+        .join("");
+    }
+
+    forwardResult.innerHTML = html;
+    bindForwardPills(); // 已知配方的 pill 還是可以點進去看路徑；未知的沒有 data-name，點了不會有反應
   }
 
   function bindForwardPills() {
@@ -1873,18 +2016,67 @@
   let ownedSet = new Set(); // 使用者手動點選「已經擁有」的材料，暫時當作免費的葉節點
   let autoOptimizations = new Map(); // 演算法自動優化找到的替代配方，item -> mats（跟使用者手動選的分開存）
 
-  // ---------- 匯入已擁有材料（從遊戲工坊素材櫃匯出的清單） ----------
+  // ---------- 匯入已擁有材料（從遊戲工坊素材櫃匯出的清單，支援多帳號切換） ----------
+  const INVENTORY_STORAGE_KEY = "pillars_pathfinder_inventories";
+  let inventories = {}; // 帳號名稱 -> [{name, icon}]
+  let activeAccount = ""; // 目前套用的帳號名稱，空字串代表「不套用」
+
+  function loadInventories() {
+    try {
+      const raw = localStorage.getItem(INVENTORY_STORAGE_KEY);
+      inventories = raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      inventories = {};
+    }
+  }
+  function saveInventories() {
+    try {
+      localStorage.setItem(INVENTORY_STORAGE_KEY, JSON.stringify(inventories));
+    } catch (e) {
+      /* 存不進去就算了，不影響主要功能 */
+    }
+  }
+
+  function renderInventorySelect() {
+    const names = Object.keys(inventories);
+    inventorySelect.innerHTML =
+      `<option value="">不套用（純查詢，不代入任何包包）</option>` +
+      names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}（${inventories[n].length} 項）</option>`).join("");
+    inventorySelect.value = activeAccount;
+  }
+
+  function applyAccount(name) {
+    activeAccount = name;
+    if (!name || !inventories[name]) {
+      ownedSet = new Set();
+    } else {
+      ownedSet = new Set(inventories[name].map((item) => item.name));
+      // 順便把這個帳號素材的 icon 補進全域對照表，跟其他 icon 來源一起用
+      for (const item of inventories[name]) {
+        if (item.icon && iconMap && !iconMap.has(item.name)) iconMap.set(item.name, item.icon);
+      }
+    }
+    updateOwnedStatus();
+    ownedDeleteAccountBtn.disabled = !name;
+    if (lastResult) reRenderCurrentResult();
+    if (browseMode === "terminal") renderCurrentBrowseMode();
+  }
+
   function updateOwnedStatus() {
-    ownedStatus.textContent = ownedSet.size > 0 ? `已匯入 ${ownedSet.size} 個已擁有材料` : "尚未匯入";
-    ownedStatus.className = ownedSet.size > 0 ? "status-line ok" : "status-line";
-    ownedClearBtn.disabled = ownedSet.size === 0;
+    if (!activeAccount) {
+      ownedStatus.textContent = "目前不套用任何帳號（純查詢）";
+      ownedStatus.className = "status-line";
+    } else {
+      ownedStatus.textContent = `目前套用「${activeAccount}」，共 ${ownedSet.size} 個已擁有材料`;
+      ownedStatus.className = "status-line ok";
+    }
   }
 
   function importOwnedFromJSON(text, filename) {
     try {
       const data = JSON.parse(text);
       if (!Array.isArray(data)) throw new Error("內容必須是陣列");
-      let count = 0;
+      const items = [];
       for (const item of data) {
         let name, icon;
         if (typeof item === "string") {
@@ -1894,14 +2086,18 @@
           icon = item.icon;
         }
         if (!name) continue;
-        ownedSet.add(name);
-        if (icon && iconMap && !iconMap.has(name)) iconMap.set(name, icon);
-        count++;
+        items.push({ name, icon: icon || "" });
       }
-      ownedDropLabel.textContent = "已選擇檔案：" + filename;
-      updateOwnedStatus();
-      if (lastResult) reRenderCurrentResult(); // 如果目前正顯示查詢結果，順便重新整理，反映新匯入的已擁有材料
-      if (browseMode === "terminal") renderCurrentBrowseMode(); // 末端造物清單的「你有這個」標籤也要跟著更新
+      if (!items.length) throw new Error("沒有解析出任何材料");
+
+      const label = inventoryLabelInput.value.trim() || `帳號${Object.keys(inventories).length + 1}`;
+      inventories[label] = items;
+      saveInventories();
+      renderInventorySelect();
+      applyAccount(label); // 匯入完直接套用這組，方便馬上使用
+
+      ownedDropLabel.textContent = `已選擇檔案：${filename}（存成「${label}」）`;
+      inventoryLabelInput.value = "";
     } catch (e) {
       ownedStatus.textContent = "匯入失敗：" + e.message;
       ownedStatus.className = "status-line err";
@@ -1916,21 +2112,56 @@
     reader.readAsText(file, "UTF-8");
   });
 
-  ownedClearBtn.addEventListener("click", () => {
-    if (!ownedSet.size) return;
-    if (confirm(`確定要清空目前已匯入/標記的 ${ownedSet.size} 個已擁有材料嗎？`)) {
-      ownedSet.clear();
-      updateOwnedStatus();
-      if (lastResult) reRenderCurrentResult();
-      if (browseMode === "terminal") renderCurrentBrowseMode();
+  inventorySelect.addEventListener("change", () => {
+    applyAccount(inventorySelect.value);
+  });
+
+  ownedDeleteAccountBtn.addEventListener("click", () => {
+    if (!activeAccount) return;
+    const name = activeAccount;
+    if (confirm(`確定要刪除「${name}」這組帳號的素材資料嗎？這個動作沒辦法復原。`)) {
+      delete inventories[name];
+      saveInventories();
+      renderInventorySelect();
+      applyAccount("");
     }
   });
 
-  // 取得某個造物實際要用的配方：使用者手動選的優先，再來是自動優化找到的，最後才是演算法預設選擇
-  function getChoice(name, solved) {
+  // 取得某個造物實際要用的配方：使用者手動選的優先，再來是自動優化找到的，
+  // 再來是演算法正式解出來的，最後如果連演算法都解不出來、但還有已知配方紀錄，
+  // 就自動挑一筆繼續展開——不管挖到第幾層，只要那個材料還有已知配方就不會停下來，
+  // 只有真正「一筆配方紀錄都沒有」的才會被當成終點、標示未知配方
+  function getChoice(name, solved, ancestorPath) {
     if (routeOverrides.has(name)) return { mats: routeOverrides.get(name) };
     if (autoOptimizations.has(name)) return { mats: autoOptimizations.get(name) };
-    return solved.choice.get(name);
+    if (solved.choice.has(name)) return solved.choice.get(name);
+    return autoPickUnknown(name, solved, ancestorPath);
+  }
+
+  let autoPickCache = new Map(); // 幫「演算法解不出來、但還有已知配方」的造物自動挑好的配方，重新載入資料時會重置
+
+  function autoPickUnknown(name, solved, ancestorPath) {
+    if (autoPickCache.has(name)) return autoPickCache.get(name);
+    const candidates = resultIndex ? resultIndex.get(name) : null;
+    if (!candidates || !candidates.length) {
+      autoPickCache.set(name, null);
+      return null;
+    }
+    // 優先排除「材料裡剛好是目前正在往下展開的上層造物」的候選，避免選到會繞回去的循環配方
+    // （例如英翻中的配方剛好是中翻英，中翻英的配方剛好又是英翻中，兩個互繞）。
+    // 如果篩選完一個候選都不剩，代表這個造物真的沒有不繞圈的選項，只好還是從裡面選一個。
+    const nonCyclic = ancestorPath
+      ? candidates.filter((r) => !r.mats.some((m) => ancestorPath.has(m)))
+      : candidates;
+    const pool = nonCyclic.length ? nonCyclic : candidates;
+
+    // 再從篩過的候選裡，優先挑材料裡「已經有算出成本」的部分比較多的那筆，展開起來比較完整
+    const scored = pool
+      .map((r) => ({ r, resolvedCount: r.mats.filter((m) => solved.cost.has(m)).length }))
+      .sort((a, b) => b.resolvedCount - a.resolvedCount);
+    const chosen = { mats: scored[0].r.mats };
+    autoPickCache.set(name, chosen);
+    return chosen;
   }
   function getTies(name, solved) {
     return (solved.ties && solved.ties.get(name)) || [];
@@ -2059,17 +2290,23 @@
     //  因為「歐洲」的原始成本剛好被排到後面，即使它其實是馬爾他的材料）。
     const visited = new Set();
     const order = [];
+    const ancestorPath = new Set(); // 目前正在往下展開的路徑，用來偵測「候選配方剛好繞回自己上層」的循環
     function walk(name) {
       if (visited.has(name)) return;
       visited.add(name);
       if (isBase(name) || ownedSet.has(name)) return;
-      const choice = getChoice(name, solved);
+      ancestorPath.add(name);
+      const choice = getChoice(name, solved, ancestorPath);
       // 這裡改用「這個 solve 情境下有沒有真的算出可用的配方」當作是否展開的判斷依據，
       // 而不是「這個造物是否曾經在資料裡當過某筆配方的結果」——
       // 因為有可能曾經有配方紀錄，但那筆配方本身往下追卻追不到基本元素，
       // 這種情況也該當成「未知/無法展開」，兩處判斷標準才會一致。
-      if (!choice) return;
+      if (!choice) {
+        ancestorPath.delete(name);
+        return;
+      }
       for (const m of choice.mats) walk(m);
+      ancestorPath.delete(name);
       order.push(name);
     }
     walk(target);
@@ -2363,7 +2600,33 @@
       return;
     }
 
-    // 兩種都找不到，才是真的毫無線索
+    // 兩種都找不到，但如果「所有已知配方」裡至少還有紀錄，
+    // 就自動幫你展開其中一筆顯示在上面，不用自己動手點
+    const knownRecipes = resultIndex ? resultIndex.get(target) : null;
+    if (knownRecipes && knownRecipes.length) {
+      // 優先挑材料裡「已知可展開的部分」比較多的那筆，展開出來的內容比較完整
+      const scored = knownRecipes
+        .map((r) => ({
+          r,
+          resolvedCount: r.mats.filter((m) => solveAny.cost.has(m)).length,
+        }))
+        .sort((a, b) => b.resolvedCount - a.resolvedCount);
+      const chosen = scored[0].r;
+
+      routeOverrides.set(target, chosen.mats);
+      const opts = {
+        warning:
+          "⚠️ 這個造物本身沒辦法用目前的資料回溯到基本元素或任何已知起點，" +
+          "以下是自動挑選的其中一筆已知配方（下面「所有已知配方」清單裡還有其他選項，點其他筆可以換）。" +
+          "標示「未知配方」的材料，代表目前收集到的資料裡還沒看過它是怎麼合成出來的。",
+      };
+      lastResult = { target, solved: solveAny, opts };
+      downloadBtn.style.display = "inline-block";
+      renderFlat(target, solveAny, opts);
+      return;
+    }
+
+    // 連一筆已知配方都沒有，才是真的毫無線索
     const suggestions = allItems
       .filter((n) => n !== target && n.includes(target) && solveAny.cost.has(n))
       .slice(0, 8);
@@ -2384,6 +2647,15 @@
   });
 
   forwardBtn.addEventListener("click", runForwardLookup);
+  forwardBrainstormBtn.addEventListener("click", () => {
+    clearTimeout(forwardDebounce); // 避免材料A打完字之後，延遲觸發的一般查詢晚一步把這裡的結果蓋掉
+    runOwnedBrainstorm();
+  });
+  forwardOwnedOnly.addEventListener("change", runForwardLookup);
+  forwardResultFilter.addEventListener("input", () => {
+    clearTimeout(forwardDebounce);
+    forwardDebounce = setTimeout(runForwardLookup, 200);
+  });
   let forwardDebounce = null;
   [forwardMat1, forwardMat2].forEach((inp) => {
     inp.addEventListener("keydown", (e) => {
@@ -2396,6 +2668,11 @@
       datalistDebounce = setTimeout(() => updateDatalist(inp.value), 120);
     });
   });
+
+  // 頁面一開始就先把之前存過的帳號素材清單讀出來，讓下拉選單有東西可選
+  // （這時候還不套用任何一組，因為 ownedSet 只有在真的載入配方資料之後才有意義）
+  loadInventories();
+  renderInventorySelect();
 
   // ---------- 自動載入（部署到網站時用）----------
   // 如果跟這個 HTML 檔放在同一個網址下有一個 recipes_data.json，
