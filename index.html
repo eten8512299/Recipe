@@ -465,6 +465,43 @@
   }
   .known-recipe-row .status.ok { color: var(--wind); }
   .known-recipe-row .status.warn { color: var(--thunder); }
+  .known-recipe-steps {
+    margin-left: auto;
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--gold);
+    background: var(--bg-soft);
+    border: 1px solid var(--gold);
+    border-radius: 999px;
+    padding: 2px 9px;
+    white-space: nowrap;
+  }
+  .known-recipe-steps.resolved {
+    font-size: 15px;
+    color: var(--wind);
+    border: 1.5px solid var(--wind);
+    padding: 3px 12px;
+  }
+  .known-recipes-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .known-recipes-header h2 { margin: 0; }
+  .known-recipes-sort-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+    font-family: ui-monospace, monospace;
+    cursor: pointer;
+    white-space: nowrap;
+  }
   .known-recipe-row .formula { font-size: 16px; }
 
   .mat-pill {
@@ -2403,7 +2440,7 @@
     });
 
     html += `</div>`;
-    html += renderAllKnownRecipes(target);
+    html += renderAllKnownRecipes(target, solved);
     resultBody.innerHTML = html;
 
     resultBody.querySelectorAll(".ownable-name").forEach((el) => {
@@ -2447,23 +2484,86 @@
     return `<span class="mat-pill ${cls}">${withIcon(m)}<small>${label}</small></span>`;
   }
 
-  function renderAllKnownRecipes(target) {
+  let knownRecipesSortByStep = false; // 「所有已知配方」清單是否依步數排序，切換後全域記住
+
+  // 暫時把 target 的配方換成候選 r，算出「如果選這條，真實去重步數會是多少」，
+  // 算完之後把 routeOverrides 還原回原本的狀態，不留任何副作用
+  function previewRecipeSteps(target, r, solved) {
+    const hadOverride = routeOverrides.has(target);
+    const prevOverride = hadOverride ? routeOverrides.get(target) : undefined;
+    routeOverrides.set(target, r.mats);
+
+    const stepCount = buildStepList(target, solved).length;
+
+    // 另外檢查這條路線展開後，有沒有任何一個環節是「未知配方」——
+    // 有的話，代表這個步數只是「盡力而為」估出來的，不是真的能從基本元素接起來
+    let fullyResolved = true;
+    const seen = new Set();
+    (function check(name) {
+      if (seen.has(name)) return;
+      seen.add(name);
+      if (isBase(name) || ownedSet.has(name)) return;
+      const choice = getChoice(name, solved);
+      if (!choice) {
+        fullyResolved = false;
+        return;
+      }
+      for (const m of choice.mats) check(m);
+    })(target);
+
+    if (hadOverride) routeOverrides.set(target, prevOverride);
+    else routeOverrides.delete(target);
+
+    return { stepCount, fullyResolved };
+  }
+
+  function renderAllKnownRecipes(target, solved) {
     const list = resultIndex ? resultIndex.get(target) : null;
     if (!list || !list.length) return "";
 
-    const rows = list
-      .map((r, idx) => {
-        const isExtract = r.mats.length === 1;
-        const allCraftable = r.mats.every((m) => isBase(m) || (solveBase && solveBase.cost.has(m)));
+    // 先把每一條配方的預覽（步數、能不能接回基本元素）都算好，排序切換要用到，
+    // 而且 data-idx 一定要保留「在原始清單裡的位置」，不能用排序後的順序，
+    // 不然點下去套用的會是錯的那一條
+    const items = list.map((r, idx) => {
+      const isExtract = r.mats.length === 1;
+      const allCraftable = r.mats.every((m) => isBase(m) || (solveBase && solveBase.cost.has(m)));
+      const preview = solved ? previewRecipeSteps(target, r, solved) : null;
+      return { r, idx, isExtract, allCraftable, preview };
+    });
+
+    const displayOrder = knownRecipesSortByStep
+      ? items.slice().sort((a, b) => {
+          const sa = a.preview ? a.preview.stepCount : Infinity;
+          const sb = b.preview ? b.preview.stepCount : Infinity;
+          if (sa !== sb) return sa - sb;
+          // 步數一樣的話，真的能接回基本元素的排前面
+          const fa = a.preview && a.preview.fullyResolved ? 0 : 1;
+          const fb = b.preview && b.preview.fullyResolved ? 0 : 1;
+          return fa - fb;
+        })
+      : items;
+
+    const rows = displayOrder
+      .map(({ r, idx, isExtract, allCraftable, preview }) => {
         const matsHtml = r.mats.map((m) => craftabilityPill(m)).join(`<span class="op">+</span>`);
         const statusHtml = allCraftable
           ? `<div class="status ok">✅ 兩邊材料都能從基本元素合成</div>`
           : `<div class="status warn">⚠️ 有材料目前還不知道怎麼合成</div>`;
+
+        // 標示這條配方走完整條路線大概需要幾步：能接回基本元素就純數字、用綠色標示、字放大；
+        // 接不回去（中途卡在未知配方）就數字後面加個「？」
+        const stepBadge = preview
+          ? `<span class="known-recipe-steps${preview.fullyResolved ? " resolved" : ""}" title="這條路線展開後的真實去重步數${preview.fullyResolved ? "" : "（有材料還不知道怎麼合成，這個數字只是目前能推到最接近的估計）"}">
+               ${preview.stepCount}${preview.fullyResolved ? "" : "？"} 步
+             </span>`
+          : "";
+
         return `
           <div class="known-recipe-row known-recipe-clickable" data-idx="${idx}" title="點一下查看這個配方的完整路徑">
             <div class="status-line-wrap">
               <span class="kind-badge ${isExtract ? "extract" : "combine"}">${isExtract ? "萃取" : "合成"}</span>
               ${statusHtml}
+              ${stepBadge}
             </div>
             <div class="formula">${matsHtml}<span class="op arrow">→</span>${withIcon(target)}</div>
           </div>
@@ -2473,7 +2573,13 @@
 
     return `
       <div class="known-recipes-section">
-        <h2>所有已知能合成「${escapeHtml(target)}」的配方（共 ${list.length} 種，不限最短路徑，點一下可查看該配方的完整路徑）</h2>
+        <div class="known-recipes-header">
+          <h2>所有已知能合成「${escapeHtml(target)}」的配方（共 ${list.length} 種，不限最短路徑，點一下可查看該配方的完整路徑）</h2>
+          <label class="known-recipes-sort-toggle">
+            <input type="checkbox" id="known-recipes-sort-checkbox" ${knownRecipesSortByStep ? "checked" : ""} />
+            依步數排序（少到多）
+          </label>
+        </div>
         ${rows}
       </div>
     `;
@@ -2497,6 +2603,23 @@
         resultBody.scrollIntoView({ behavior: "smooth", block: "start" });
       });
     });
+
+    const sortCheckbox = document.getElementById("known-recipes-sort-checkbox");
+    if (sortCheckbox) {
+      sortCheckbox.addEventListener("change", () => {
+        knownRecipesSortByStep = sortCheckbox.checked;
+        if (lastResult) {
+          reRenderCurrentResult();
+        } else {
+          // 完全查無主要路徑的情況，這裡沒有 lastResult 可以重繪，直接局部重繪這個區塊即可
+          const container = document.querySelector(".known-recipes-section");
+          if (container) {
+            container.outerHTML = renderAllKnownRecipes(target, solveAny);
+            wireKnownRecipeClicks(target);
+          }
+        }
+      });
+    }
   }
 
   // 純文字版本，給下載用：「步驟 N · matA+matB → result」
@@ -2636,7 +2759,7 @@
         可能原因：這個造物名稱不在已載入的資料中，或它從未出現在任何配方的結果欄位。
       </div>
       ${suggestions.length ? `<div class="empty-msg">你是不是要找：${suggestions.map(escapeHtml).join("、")}</div>` : ""}
-      ${renderAllKnownRecipes(target)}
+      ${renderAllKnownRecipes(target, solveAny)}
     `;
     wireKnownRecipeClicks(target);
   }
