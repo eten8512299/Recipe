@@ -624,13 +624,22 @@
     flex-direction: column;
     gap: 20px;
   }
+  .panel-sticky-top {
+    position: sticky;
+    top: 20px;
+    z-index: 5;
+    background: var(--bg);
+  }
   .col-right {
     position: sticky;
     top: 20px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
   }
   @media (max-width: 880px) {
     .layout { grid-template-columns: 1fr; }
-    .col-right { position: static; }
+    .col-right { position: static; max-height: none; overflow-y: visible; }
+    .panel-sticky-top { position: static; }
   }
 
   .panel-browse {
@@ -856,7 +865,7 @@
 
     <div class="layout">
       <div class="col-left">
-        <div class="panel">
+        <div class="panel panel-sticky-top">
           <h2>① 載入資料 &amp; 查詢</h2>
           <label class="drop-zone" id="drop-zone">
             <input type="file" id="file-input" accept=".json,.csv" />
@@ -883,9 +892,9 @@
             <datalist id="item-list"></datalist>
             <button id="search-btn" type="button" disabled>查詢</button>
           </div>
+        </div>
 
-          <hr class="section-divider" />
-
+        <div class="panel">
           <div>
             <div class="hint-label">正向查詢：輸入材料看看能合成 / 萃取出什麼</div>
             <div class="search-row" style="margin-bottom:8px;">
@@ -934,6 +943,25 @@
             </label>
             <div class="status-line" id="owned-status" style="margin-top:8px;">尚未套用任何帳號</div>
             <button id="owned-delete-account-btn" type="button" class="secondary" style="width:100%;margin-top:8px;" disabled>刪除目前選中的帳號資料</button>
+          </div>
+
+          <hr class="section-divider" />
+
+          <div>
+            <div class="hint-label">🔗 多造物共同素材：貼幾個造物，比對各自最短路徑</div>
+            <textarea
+              id="common-mats-input"
+              class="base-edit"
+              placeholder="一行一個造物名稱，例如：&#10;香港迪士尼樂園&#10;東京迪士尼樂園&#10;上海迪士尼樂園"
+              style="width:100%;height:90px;margin-bottom:8px;resize:vertical;"
+              disabled
+            ></textarea>
+            <button id="common-mats-btn" type="button" disabled style="width:100%;margin-bottom:8px;">分析</button>
+            <div class="browse-mode-toggle" id="common-mats-view-toggle" style="display:none;">
+              <button type="button" id="common-mats-mode-target" class="active">依造物列出</button>
+              <button type="button" id="common-mats-mode-material">依素材列出</button>
+            </div>
+            <div id="common-mats-result" class="forward-result"></div>
           </div>
         </div>
 
@@ -1344,6 +1372,8 @@
     ownedFileInput.disabled = false;
     inventorySelect.disabled = false;
     inventoryLabelInput.disabled = false;
+    commonMatsInput.disabled = false;
+    commonMatsBtn.disabled = false;
     console.time("[perf] datalist populate");
     updateDatalist("");
     console.timeEnd("[perf] datalist populate");
@@ -2019,14 +2049,232 @@
     bindForwardPills(); // 已知配方的 pill 還是可以點進去看路徑；未知的沒有 data-name，點了不會有反應
   }
 
-  function bindForwardPills() {
-    forwardResult.querySelectorAll(".fr-pill").forEach((pill) => {
+  function bindForwardPills(container) {
+    (container || forwardResult).querySelectorAll(".fr-pill").forEach((pill) => {
       pill.addEventListener("click", () => {
         searchInput.value = pill.dataset.name;
         runSearch();
       });
     });
   }
+
+  // ---------- 多造物共同素材分析 ----------
+  const commonMatsInput = document.getElementById("common-mats-input");
+  const commonMatsBtn = document.getElementById("common-mats-btn");
+  const commonMatsResult = document.getElementById("common-mats-result");
+  const commonMatsViewToggle = document.getElementById("common-mats-view-toggle");
+  const commonMatsModeTargetBtn = document.getElementById("common-mats-mode-target");
+  const commonMatsModeMaterialBtn = document.getElementById("common-mats-mode-material");
+
+  // 依序嘗試：完全解 -> 盡力而為解 -> 自動挑一筆已知配方，
+  // 回傳這個造物「最短路徑」上用到的所有材料名稱（不含造物本身、不含基本元素）；
+  // 完全查無任何資料的話回傳 null。跟優先補強清單一樣，用完就把暫時的路線覆寫還原，不留副作用。
+  function computeStepsForTarget(name) {
+    let solved = null;
+    let fullyResolved = true;
+    if (solveBase.cost.has(name)) {
+      solved = solveBase;
+    } else if (solveAny.cost.has(name)) {
+      solved = solveAny;
+      fullyResolved = false;
+    } else {
+      const candidates = resultIndex ? resultIndex.get(name) : null;
+      if (!candidates || !candidates.length) return null;
+      const scored = candidates
+        .map((r) => ({ r, resolvedCount: r.mats.filter((m) => solveAny.cost.has(m)).length }))
+        .sort((a, b) => b.resolvedCount - a.resolvedCount);
+      const hadOverride = routeOverrides.has(name);
+      const prevOverride = hadOverride ? routeOverrides.get(name) : undefined;
+      routeOverrides.set(name, scored[0].r.mats);
+      const rawSteps = buildStepList(name, solveAny);
+      if (hadOverride) routeOverrides.set(name, prevOverride);
+      else routeOverrides.delete(name);
+      // 總步數要含「合成目標本身」這最後一步（rawSteps 本來就含目標，直接用長度），
+      // 但列材料清單時，目標自己不算是自己的材料，要排除掉
+      return {
+        steps: new Set(rawSteps.filter((s) => s !== name)),
+        totalSteps: rawSteps.length,
+        fullyResolved: false,
+      };
+    }
+    const rawSteps = buildStepList(name, solved);
+    return {
+      steps: new Set(rawSteps.filter((s) => s !== name)),
+      totalSteps: rawSteps.length,
+      fullyResolved,
+    };
+  }
+
+  let commonMatsData = null; // { perTarget, countMap, total } 分析完先存起來，切換檢視模式不用重算
+  let commonMatsViewMode = "target"; // "target" | "material"
+  let commonMatsExpanded = new Set(); // 「依素材列出」模式下，哪些材料目前是展開狀態
+
+  function runCommonMaterialsAnalysis() {
+    const names = Array.from(
+      new Set(
+        commonMatsInput.value
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      )
+    );
+    if (names.length < 2) {
+      commonMatsViewToggle.style.display = "none";
+      commonMatsResult.innerHTML = `<div class="fr-empty">至少要貼兩個不重複的造物名稱才能比對</div>`;
+      return;
+    }
+
+    const perTarget = [];
+    const unresolved = [];
+    for (const name of names) {
+      const result = computeStepsForTarget(name);
+      if (!result) {
+        unresolved.push(name);
+        continue;
+      }
+      perTarget.push({ name, steps: result.steps, totalSteps: result.totalSteps, fullyResolved: result.fullyResolved });
+    }
+
+    if (perTarget.length < 2) {
+      commonMatsViewToggle.style.display = "none";
+      commonMatsResult.innerHTML = `<div class="fr-empty">查得到資料的造物不足兩個，沒辦法比對共同材料</div>`;
+      return;
+    }
+
+    // 統計每個材料被幾個目標的路徑用到
+    const countMap = new Map(); // 材料名 -> Set(用到它的目標名稱)
+    for (const { name, steps } of perTarget) {
+      for (const s of steps) {
+        if (!countMap.has(s)) countMap.set(s, new Set());
+        countMap.get(s).add(name);
+      }
+    }
+
+    commonMatsData = { perTarget, unresolved, countMap, total: perTarget.length };
+    commonMatsExpanded = new Set();
+    commonMatsViewToggle.style.display = "flex";
+    renderCommonMatsCurrentMode();
+  }
+
+  function renderCommonMatsCurrentMode() {
+    if (!commonMatsData) return;
+    commonMatsResult.innerHTML =
+      (commonMatsData.unresolved.length
+        ? `<div class="fr-empty" style="margin-bottom:10px;">⚠️ 以下 ${commonMatsData.unresolved.length} 個完全查無資料，已略過：${commonMatsData.unresolved
+            .map(escapeHtml)
+            .join("、")}</div>`
+        : "") + (commonMatsViewMode === "target" ? renderCommonMatsByTarget() : renderCommonMatsByMaterial());
+    bindForwardPills(commonMatsResult);
+    wireCommonMatsExpandButtons();
+  }
+
+  // 依造物列出：每個造物自己的完整材料清單，材料依「跟其他幾個造物共用」排序，
+  // 越多造物共用的排越前面（比較值得優先準備）；造物本身依總步數由少到多排
+  function renderCommonMatsByTarget() {
+    const { perTarget, countMap, total } = commonMatsData;
+    const sortedTargets = perTarget.slice().sort((a, b) => a.totalSteps - b.totalSteps);
+
+    return sortedTargets
+      .map(({ name, steps, totalSteps, fullyResolved }) => {
+        const matsSorted = Array.from(steps).sort((a, b) => {
+          const ca = countMap.get(a).size;
+          const cb = countMap.get(b).size;
+          return cb - ca || zhCollator.compare(a, b);
+        });
+        const matsHtml = matsSorted.length
+          ? matsSorted
+              .map((m) => {
+                const shareCount = countMap.get(m).size;
+                const shareBadge =
+                  shareCount > 1
+                    ? `<span class="base-tag" style="background:var(--gold);color:#241a0c;">共用 ${shareCount}/${total}</span>`
+                    : "";
+                return `<span class="fr-pill" data-name="${escapeHtml(m)}">${withIcon(m)}${shareBadge}<span class="fr-arrow">↗</span></span>`;
+              })
+              .join("")
+          : `<div class="fr-empty" style="margin:4px 0;">（沒有中繼材料，直接從基本元素合成）</div>`;
+
+        return `
+          <div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--panel-border);">
+            <div class="fr-label" style="margin-bottom:6px;">
+              ${withIcon(name)}　<span class="known-recipe-steps${fullyResolved ? " resolved" : ""}">${totalSteps}${fullyResolved ? "" : "？"} 步</span>
+            </div>
+            ${matsHtml}
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  // 依素材列出：先列共用素材（依共用程度排序），點一下展開看是哪些造物用到、各自要幾步
+  function renderCommonMatsByMaterial() {
+    const { countMap, total, perTarget } = commonMatsData;
+    const totalStepsByName = new Map(perTarget.map((t) => [t.name, t]));
+
+    const ranked = Array.from(countMap.entries())
+      .map(([mat, targets]) => ({ mat, count: targets.size, targets: Array.from(targets) }))
+      .filter((r) => r.count >= 2)
+      .sort((a, b) => b.count - a.count || zhCollator.compare(a.mat, b.mat));
+
+    if (!ranked.length) {
+      return `<div class="fr-empty">沒有被兩個以上造物共用的材料（每個造物用到的中繼材料都不一樣）</div>`;
+    }
+
+    return (
+      `<div class="fr-label">📊 共用素材（依共用程度排序，共 ${ranked.length} 項，點一下展開看細節）</div>` +
+      ranked
+        .map((r) => {
+          const isOpen = commonMatsExpanded.has(r.mat);
+          const detailRows = r.targets
+            .slice()
+            .sort((a, b) => (totalStepsByName.get(a)?.totalSteps || 0) - (totalStepsByName.get(b)?.totalSteps || 0))
+            .map((t) => {
+              const info = totalStepsByName.get(t);
+              const stepLabel = info ? `${info.totalSteps}${info.fullyResolved ? "" : "？"} 步` : "";
+              return `<span class="fr-pill" data-name="${escapeHtml(t)}">${withIcon(t)}<span class="known-recipe-steps${info && info.fullyResolved ? " resolved" : ""}">${stepLabel}</span><span class="fr-arrow">↗</span></span>`;
+            })
+            .join("");
+          return `
+            <div class="known-recipe-row common-mats-expand-toggle" data-mat="${escapeHtml(r.mat)}" style="cursor:pointer;">
+              <div class="status-line-wrap">
+                <span class="kind-badge combine">${isOpen ? "▼" : "▶"}</span>
+                <span class="fr-label" style="margin:0;">${withIcon(r.mat)}</span>
+                <span class="base-tag" style="background:var(--gold);color:#241a0c;margin-left:auto;">共用 ${r.count}/${total}</span>
+              </div>
+              ${isOpen ? `<div style="margin-top:8px;">${detailRows}</div>` : ""}
+            </div>
+          `;
+        })
+        .join("")
+    );
+  }
+
+  function wireCommonMatsExpandButtons() {
+    commonMatsResult.querySelectorAll(".common-mats-expand-toggle").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        // 展開區塊裡的 fr-pill 是要跳去查詢的，不要被這裡的展開/收合攔截
+        if (e.target.closest(".fr-pill")) return;
+        const mat = el.dataset.mat;
+        if (commonMatsExpanded.has(mat)) commonMatsExpanded.delete(mat);
+        else commonMatsExpanded.add(mat);
+        renderCommonMatsCurrentMode();
+      });
+    });
+  }
+
+  commonMatsBtn.addEventListener("click", runCommonMaterialsAnalysis);
+  commonMatsModeTargetBtn.addEventListener("click", () => {
+    commonMatsViewMode = "target";
+    commonMatsModeTargetBtn.classList.add("active");
+    commonMatsModeMaterialBtn.classList.remove("active");
+    renderCommonMatsCurrentMode();
+  });
+  commonMatsModeMaterialBtn.addEventListener("click", () => {
+    commonMatsViewMode = "material";
+    commonMatsModeMaterialBtn.classList.add("active");
+    commonMatsModeTargetBtn.classList.remove("active");
+    renderCommonMatsCurrentMode();
+  });
 
   // ---------- 查詢 + 路徑重建 ----------
   function escapeHtml(s) {
