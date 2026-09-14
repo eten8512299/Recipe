@@ -412,6 +412,17 @@
     color: var(--gold);
     border-color: var(--gold);
   }
+  .copy-name-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0 3px;
+    opacity: 0.45;
+    vertical-align: middle;
+    transition: opacity 0.15s;
+  }
+  .copy-name-btn:hover { opacity: 1; }
 
   .tie-row {
     margin-top: 6px;
@@ -892,6 +903,10 @@
             <datalist id="item-list"></datalist>
             <button id="search-btn" type="button" disabled>查詢</button>
           </div>
+          <div id="search-history-row" style="margin-top:8px;display:none;">
+            <span style="font-size:11px;color:var(--text-dim);font-family:ui-monospace,monospace;">最近查詢：</span>
+            <span id="search-history-list"></span>
+          </div>
         </div>
 
         <div class="panel">
@@ -943,6 +958,25 @@
             </label>
             <div class="status-line" id="owned-status" style="margin-top:8px;">尚未套用任何帳號</div>
             <button id="owned-delete-account-btn" type="button" class="secondary" style="width:100%;margin-top:8px;" disabled>刪除目前選中的帳號資料</button>
+          </div>
+
+          <hr class="section-divider" />
+
+          <div>
+            <div class="hint-label">📥 未知素材收集：查詢時自動蒐集當前路徑裡的「未知配方」，方便之後貼進指定造物查詢書籤</div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);margin-bottom:8px;cursor:pointer;flex-wrap:wrap;">
+              <input type="checkbox" id="unknown-collect-lowcount-toggle" />
+              同時收集配方數少於
+              <input type="number" id="unknown-collect-lowcount-threshold" class="base-edit" value="5" min="1" style="width:52px;padding:2px 6px;display:inline-block;" />
+              筆的材料（不只是完全未知的）
+            </label>
+            <div class="status-line" id="unknown-collect-status">目前累積 0 項</div>
+            <div id="unknown-collect-list" class="forward-result" style="max-height:140px;overflow-y:auto;margin-top:6px;"></div>
+            <div style="display:flex;gap:8px;margin-top:8px;">
+              <button id="unknown-collect-copy-btn" type="button" class="secondary" style="flex:1;">複製文字</button>
+              <button id="unknown-collect-export-btn" type="button" class="secondary" style="flex:1;">匯出成 txt</button>
+              <button id="unknown-collect-clear-btn" type="button" class="secondary" style="flex:1;">清空收集清單</button>
+            </div>
           </div>
 
           <hr class="section-divider" />
@@ -1005,6 +1039,7 @@
         <div class="panel panel-result" id="result-panel">
           <h2>
             ③ 合成路線
+            <button type="button" id="copy-btn" class="secondary" style="display:none;">複製文字</button>
             <button type="button" id="download-btn" class="secondary" style="display:none;">下載純文字</button>
           </h2>
           <div id="result-body">
@@ -1042,6 +1077,7 @@
   let resultIndex = null; // result -> [{mats,result}]：這個造物所有已知配方，反查用
   let iconMap = null; // 造物名稱 -> emoji，只是顯示/搜尋用
   let routeOverrides = new Map(); // 使用者手動切換過的「等價路線」選擇，item -> mats
+  let stateVersion = 0; // 已擁有材料／手動配方切換每次真的改變時 +1，用來偵測「共同素材」分析結果是不是已經過期
   let solveBase = null;   // {cost, choice}  完全回溯到 5 元素（或加上偷吃步工具）
   let solveAny = null;    // {cost, choice}  允許用「未知配方材料」當起點
   let allItems = [];      // for datalist
@@ -1359,6 +1395,7 @@
   async function afterLoad(rawText) {
     await resolveIndexAndSolve(rawText);
     updateLoadStatusText();
+    reviewUnknownCollection(); // 資料重新載入了，順便審查一次收集清單，把現在已經有配方的項目自動移除
     searchInput.disabled = false;
     searchBtn.disabled = false;
     browseFilter.disabled = false;
@@ -2069,14 +2106,257 @@
   // 依序嘗試：完全解 -> 盡力而為解 -> 自動挑一筆已知配方，
   // 回傳這個造物「最短路徑」上用到的所有材料名稱（不含造物本身、不含基本元素）；
   // 完全查無任何資料的話回傳 null。跟優先補強清單一樣，用完就把暫時的路線覆寫還原，不留副作用。
+  // 檢查某個造物「目前實際會用到的路線」（含手動切換過的覆寫、已擁有材料）
+  // 有沒有任何一個環節卡在未知配方——有的話代表這條路線沒辦法真的接回基本元素，
+  // 不能只看 solveBase.cost 有沒有這個造物，因為那個是「演算法自然算出來的原始路線」，
+  // 不會反映使用者手動切換過的覆寫。
+  function checkFullyResolved(target, solved) {
+    let fullyResolved = true;
+    const seen = new Set();
+    (function check(name) {
+      if (seen.has(name)) return;
+      seen.add(name);
+      if (isBase(name) || ownedSet.has(name)) return;
+      const choice = getChoice(name, solved);
+      if (!choice) {
+        fullyResolved = false;
+        return;
+      }
+      for (const m of choice.mats) check(m);
+    })(target);
+    return fullyResolved;
+  }
+
+  // 收集「目前這條路線裡，實際會展開顯示出來的未知配方材料」——
+  // 邏輯完全比照畫面上的樹狀展開（同樣在已擁有材料處停下來），
+  // 這樣收集到的東西才會跟畫面上看到的「未知配方」標籤一致。
+  // lowCountThreshold 大於 0 時，連「有配方、但配方數低於這個門檻」的材料也一併收集，
+  // 這種材料本身還是有解、walk() 會照常往下展開，只是同時也記錄下來當作「值得再去查一下」的候選。
+  function collectUnknownInTree(target, solved, lowCountThreshold) {
+    const result = new Set();
+    const seen = new Set();
+    (function walk(name) {
+      if (seen.has(name)) return;
+      seen.add(name);
+      if (isBase(name) || ownedSet.has(name)) return;
+      const choice = getChoice(name, solved);
+      if (!choice) {
+        result.add(name);
+        return;
+      }
+      if (lowCountThreshold > 0) {
+        const knownCount = resultIndex && resultIndex.has(name) ? resultIndex.get(name).length : 0;
+        if (knownCount > 0 && knownCount < lowCountThreshold) {
+          result.add(name);
+        }
+      }
+      for (const m of choice.mats) walk(m);
+    })(target);
+    return result;
+  }
+
+  // ---------- 未知素材收集清單（存在瀏覽器本機，重新整理也不會消失） ----------
+  const UNKNOWN_COLLECTION_KEY = "pillars_pathfinder_unknown_collection";
+  let unknownCollection = new Map(); // 名稱 -> icon
+
+  function loadUnknownCollection() {
+    try {
+      const raw = localStorage.getItem(UNKNOWN_COLLECTION_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      unknownCollection = new Map(Object.entries(parsed));
+    } catch (e) {
+      unknownCollection = new Map();
+    }
+  }
+  function saveUnknownCollection() {
+    try {
+      localStorage.setItem(UNKNOWN_COLLECTION_KEY, JSON.stringify(Object.fromEntries(unknownCollection)));
+    } catch (e) {
+      /* 存不進去就算了 */
+    }
+  }
+
+  const unknownCollectStatus = document.getElementById("unknown-collect-status");
+  const unknownCollectList = document.getElementById("unknown-collect-list");
+  const unknownCollectCopyBtn = document.getElementById("unknown-collect-copy-btn");
+  const unknownCollectExportBtn = document.getElementById("unknown-collect-export-btn");
+  const unknownCollectClearBtn = document.getElementById("unknown-collect-clear-btn");
+  const unknownCollectLowCountToggle = document.getElementById("unknown-collect-lowcount-toggle");
+  const unknownCollectLowCountThreshold = document.getElementById("unknown-collect-lowcount-threshold");
+
+  const UNKNOWN_LOWCOUNT_SETTING_KEY = "pillars_pathfinder_lowcount_setting";
+  function loadLowCountSetting() {
+    try {
+      const raw = localStorage.getItem(UNKNOWN_LOWCOUNT_SETTING_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      unknownCollectLowCountToggle.checked = !!parsed.enabled;
+      if (parsed.threshold) unknownCollectLowCountThreshold.value = parsed.threshold;
+    } catch (e) {
+      /* 讀不到就用預設值 */
+    }
+  }
+  function saveLowCountSetting() {
+    try {
+      localStorage.setItem(
+        UNKNOWN_LOWCOUNT_SETTING_KEY,
+        JSON.stringify({ enabled: unknownCollectLowCountToggle.checked, threshold: unknownCollectLowCountThreshold.value })
+      );
+    } catch (e) {
+      /* 存不進去就算了 */
+    }
+  }
+  unknownCollectLowCountToggle.addEventListener("change", saveLowCountSetting);
+  unknownCollectLowCountThreshold.addEventListener("input", saveLowCountSetting);
+
+  function renderUnknownCollection() {
+    unknownCollectStatus.textContent = `目前累積 ${unknownCollection.size} 項`;
+    if (!unknownCollection.size) {
+      unknownCollectList.innerHTML = "";
+      return;
+    }
+    const names = Array.from(unknownCollection.keys()).sort((a, b) => zhCollator.compare(a, b));
+    unknownCollectList.innerHTML = names
+      .map((n) => {
+        const icon = unknownCollection.get(n) || "";
+        return `<span class="fr-pill" data-name="${escapeHtml(n)}">${icon ? escapeHtml(icon) + " " : ""}${escapeHtml(n)}<span class="fr-arrow">↗</span></span>`;
+      })
+      .join("");
+    bindForwardPills(unknownCollectList);
+  }
+
+  // 每次重新載入資料（換一份新的 recipes_data.json、或改用貼上內容）時呼叫，
+  // 把收集清單裡「現在已經有配方了」的項目自動移除，不用自己手動清空重來
+  function reviewUnknownCollection() {
+    if (!unknownCollection.size || !resultIndex) return;
+    let changed = false;
+    for (const name of Array.from(unknownCollection.keys())) {
+      if (resultIndex.has(name)) {
+        unknownCollection.delete(name);
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveUnknownCollection();
+      renderUnknownCollection();
+    }
+  }
+
+  // 每次查詢完成、畫面上顯示出新的路徑時呼叫，把這條路徑裡的未知配方材料自動收進清單
+  function autoCollectUnknown(target, solved) {
+    const threshold = unknownCollectLowCountToggle.checked
+      ? Math.max(1, parseInt(unknownCollectLowCountThreshold.value, 10) || 0)
+      : 0;
+    const unknowns = collectUnknownInTree(target, solved, threshold);
+    if (!unknowns.size) return;
+    let changed = false;
+    for (const name of unknowns) {
+      if (!unknownCollection.has(name)) {
+        unknownCollection.set(name, iconMap ? iconMap.get(name) || "" : "");
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveUnknownCollection();
+      renderUnknownCollection();
+    }
+  }
+
+  unknownCollectCopyBtn.addEventListener("click", async () => {
+    if (!unknownCollection.size) {
+      alert("目前收集清單是空的，先查幾個東西讓它自動收集一些未知素材吧。");
+      return;
+    }
+    const names = Array.from(unknownCollection.keys()).sort((a, b) => zhCollator.compare(a, b));
+    const originalLabel = unknownCollectCopyBtn.textContent;
+    const ok = await copyToClipboard(names.join("\n"));
+    unknownCollectCopyBtn.textContent = ok ? "已複製！" : "複製失敗";
+    setTimeout(() => {
+      unknownCollectCopyBtn.textContent = originalLabel;
+    }, 1500);
+  });
+
+  unknownCollectExportBtn.addEventListener("click", () => {
+    if (!unknownCollection.size) {
+      alert("目前收集清單是空的，先查幾個東西讓它自動收集一些未知素材吧。");
+      return;
+    }
+    const names = Array.from(unknownCollection.keys()).sort((a, b) => zhCollator.compare(a, b));
+    const blob = new Blob(["\uFEFF" + names.join("\n")], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `未知素材收集_${timestampTag()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  unknownCollectClearBtn.addEventListener("click", () => {
+    if (!unknownCollection.size) return;
+    if (confirm(`確定要清空目前收集的 ${unknownCollection.size} 項未知素材嗎？這個動作沒辦法復原。`)) {
+      unknownCollection.clear();
+      saveUnknownCollection();
+      renderUnknownCollection();
+    }
+  });
+
+  // ---------- 搜尋紀錄（保留最近 10 個，存在瀏覽器本機） ----------
+  const SEARCH_HISTORY_KEY = "pillars_pathfinder_search_history";
+  const SEARCH_HISTORY_MAX = 10;
+  let searchHistory = [];
+
+  function loadSearchHistory() {
+    try {
+      const raw = localStorage.getItem(SEARCH_HISTORY_KEY);
+      searchHistory = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(searchHistory)) searchHistory = [];
+    } catch (e) {
+      searchHistory = [];
+    }
+  }
+  function saveSearchHistory() {
+    try {
+      localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(searchHistory));
+    } catch (e) {
+      /* 存不進去就算了 */
+    }
+  }
+
+  const searchHistoryRow = document.getElementById("search-history-row");
+  const searchHistoryList = document.getElementById("search-history-list");
+
+  function renderSearchHistory() {
+    if (!searchHistory.length) {
+      searchHistoryRow.style.display = "none";
+      return;
+    }
+    searchHistoryRow.style.display = "block";
+    searchHistoryList.innerHTML = searchHistory
+      .map(
+        (name) =>
+          `<span class="fr-pill" data-name="${escapeHtml(name)}" style="font-size:11px;padding:2px 8px;margin:2px 4px 2px 0;">${withIcon(name)}</span>`
+      )
+      .join("");
+    bindForwardPills(searchHistoryList);
+  }
+
+  function addToSearchHistory(target) {
+    const idx = searchHistory.indexOf(target);
+    if (idx !== -1) searchHistory.splice(idx, 1); // 已經查過的話先移除舊位置，等一下補到最前面
+    searchHistory.unshift(target);
+    if (searchHistory.length > SEARCH_HISTORY_MAX) searchHistory.length = SEARCH_HISTORY_MAX;
+    saveSearchHistory();
+    renderSearchHistory();
+  }
+
   function computeStepsForTarget(name) {
     let solved = null;
-    let fullyResolved = true;
     if (solveBase.cost.has(name)) {
       solved = solveBase;
     } else if (solveAny.cost.has(name)) {
       solved = solveAny;
-      fullyResolved = false;
     } else {
       const candidates = resultIndex ? resultIndex.get(name) : null;
       if (!candidates || !candidates.length) return null;
@@ -2086,7 +2366,11 @@
       const hadOverride = routeOverrides.has(name);
       const prevOverride = hadOverride ? routeOverrides.get(name) : undefined;
       routeOverrides.set(name, scored[0].r.mats);
+      // 跟主查詢一樣跑一次自動優化，才會發現「用已擁有材料當捷徑其實步數更少」這種情況，
+      // 不然只看 solveBase/solveAny 的原始選擇，會忽略掉已擁有材料能帶來的捷徑
+      optimizeRoute(name, solveAny);
       const rawSteps = buildStepList(name, solveAny);
+      const fullyResolved = checkFullyResolved(name, solveAny);
       if (hadOverride) routeOverrides.set(name, prevOverride);
       else routeOverrides.delete(name);
       // 總步數要含「合成目標本身」這最後一步（rawSteps 本來就含目標，直接用長度），
@@ -2094,10 +2378,12 @@
       return {
         steps: new Set(rawSteps.filter((s) => s !== name)),
         totalSteps: rawSteps.length,
-        fullyResolved: false,
+        fullyResolved,
       };
     }
+    optimizeRoute(name, solved);
     const rawSteps = buildStepList(name, solved);
+    const fullyResolved = checkFullyResolved(name, solved);
     return {
       steps: new Set(rawSteps.filter((s) => s !== name)),
       totalSteps: rawSteps.length,
@@ -2126,6 +2412,9 @@
 
     const perTarget = [];
     const unresolved = [];
+    // optimizeRoute 內部會直接重置全域的 autoOptimizations，這裡批次跑很多個目標，
+    // 用完要把「使用者目前主查詢畫面正在用的優化結果」還原回去，不然這裡的分析會污染到主畫面的顯示
+    const savedAutoOptimizations = autoOptimizations;
     for (const name of names) {
       const result = computeStepsForTarget(name);
       if (!result) {
@@ -2134,6 +2423,7 @@
       }
       perTarget.push({ name, steps: result.steps, totalSteps: result.totalSteps, fullyResolved: result.fullyResolved });
     }
+    autoOptimizations = savedAutoOptimizations;
 
     if (perTarget.length < 2) {
       commonMatsViewToggle.style.display = "none";
@@ -2150,7 +2440,7 @@
       }
     }
 
-    commonMatsData = { perTarget, unresolved, countMap, total: perTarget.length };
+    commonMatsData = { perTarget, unresolved, countMap, total: perTarget.length, computedAtVersion: stateVersion };
     commonMatsExpanded = new Set();
     commonMatsViewToggle.style.display = "flex";
     renderCommonMatsCurrentMode();
@@ -2158,7 +2448,14 @@
 
   function renderCommonMatsCurrentMode() {
     if (!commonMatsData) return;
+    const stale = commonMatsData.computedAtVersion !== stateVersion;
+    const staleWarning = stale
+      ? `<div class="fr-empty" style="margin-bottom:10px;color:var(--thunder);border:1px solid var(--thunder);border-radius:8px;padding:8px 10px;">
+           ⚠️ 分析完成之後，你有更動過「已擁有材料」或手動切換過某個造物的配方，下面的步數可能已經過期、跟現在的即時查詢結果對不上，建議重新按一次「分析」。
+         </div>`
+      : "";
     commonMatsResult.innerHTML =
+      staleWarning +
       (commonMatsData.unresolved.length
         ? `<div class="fr-empty" style="margin-bottom:10px;">⚠️ 以下 ${commonMatsData.unresolved.length} 個完全查無資料，已略過：${commonMatsData.unresolved
             .map(escapeHtml)
@@ -2187,7 +2484,7 @@
                 const shareCount = countMap.get(m).size;
                 const shareBadge =
                   shareCount > 1
-                    ? `<span class="base-tag" style="background:var(--gold);color:#241a0c;">共用 ${shareCount}/${total}</span>`
+                    ? `<span class="base-tag" style="background:var(--water);color:#fff;">共用 ${shareCount}/${total}</span>`
                     : "";
                 return `<span class="fr-pill" data-name="${escapeHtml(m)}">${withIcon(m)}${shareBadge}<span class="fr-arrow">↗</span></span>`;
               })
@@ -2197,7 +2494,7 @@
         return `
           <div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--panel-border);">
             <div class="fr-label" style="margin-bottom:6px;">
-              ${withIcon(name)}　<span class="known-recipe-steps${fullyResolved ? " resolved" : ""}">${totalSteps}${fullyResolved ? "" : "？"} 步</span>
+              <span class="fr-pill" data-name="${escapeHtml(name)}" title="點一下查看「${escapeHtml(name)}」自己的完整路徑">${withIcon(name)}<span class="fr-arrow">↗</span></span>　<span class="known-recipe-steps${fullyResolved ? " resolved" : ""}">${totalSteps}${fullyResolved ? "" : "？"} 步</span>
             </div>
             ${matsHtml}
           </div>
@@ -2238,8 +2535,8 @@
             <div class="known-recipe-row common-mats-expand-toggle" data-mat="${escapeHtml(r.mat)}" style="cursor:pointer;">
               <div class="status-line-wrap">
                 <span class="kind-badge combine">${isOpen ? "▼" : "▶"}</span>
-                <span class="fr-label" style="margin:0;">${withIcon(r.mat)}</span>
-                <span class="base-tag" style="background:var(--gold);color:#241a0c;margin-left:auto;">共用 ${r.count}/${total}</span>
+                <span class="fr-pill" data-name="${escapeHtml(r.mat)}" title="點一下查看「${escapeHtml(r.mat)}」自己的完整路徑">${withIcon(r.mat)}<span class="fr-arrow">↗</span></span>
+                <span class="base-tag" style="background:var(--water);color:#fff;margin-left:auto;">共用 ${r.count}/${total}</span>
               </div>
               ${isOpen ? `<div style="margin-top:8px;">${detailRows}</div>` : ""}
             </div>
@@ -2331,6 +2628,7 @@
   }
 
   function applyAccount(name) {
+    stateVersion++;
     activeAccount = name;
     if (!name || !inventories[name]) {
       ownedSet = new Set();
@@ -2617,11 +2915,22 @@
     if (opts && opts.warning) {
       html += `<div class="error-msg" style="margin-bottom:16px;">${opts.warning}</div>`;
     }
+    if (steps.length === 0 && ownedSet.has(target)) {
+      html += `
+        <div class="result-summary">
+          <span class="steps">✅</span>
+          <span class="label">你已經標記擁有「${escapeHtml(target)}」了，不需要任何合成步驟</span>
+        </div>
+      `;
+    } else {
+      html += `
+        <div class="result-summary">
+          <span class="steps">${steps.length}</span>
+          <span class="label">道配方，即可從基本元素合成出目標（材料不會用掉，每種配方只需做一次）</span>
+        </div>
+      `;
+    }
     html += `
-      <div class="result-summary">
-        <span class="steps">${steps.length}</span>
-        <span class="label">道配方，即可從基本元素合成出目標（材料不會用掉，每種配方只需做一次）</span>
-      </div>
       <div class="owned-bar">
         <span>🖱️ 點材料名稱標記「已擁有」縮短路徑；步驟旁的「⇄ 切換」代表有其他等價配方可選</span>
         ${ownedSet.size > 0 ? `<span class="owned-count">已擁有 ${ownedSet.size} 項</span><button type="button" id="clear-owned-btn" class="secondary">清空已擁有</button>` : ""}
@@ -2638,6 +2947,7 @@
 
   function renderFlat(target, solved, opts) {
     const steps = buildStepList(target, solved);
+    autoCollectUnknown(target, solved); // 每次實際顯示結果時，順便把這條路徑裡的未知配方材料收進清單
 
     let html = renderSummary(target, solved, opts) + `<div class="chain">`;
 
@@ -2650,11 +2960,11 @@
         .map((m) => {
           const lc = leafClass(m, solved);
           const tag = lc ? `<span class="base-tag" style="${lc === "leaf-unknown" ? "background:var(--thunder);" : lc === "leaf-owned" ? "background:var(--wind);" : ""}">${leafLabel(m, solved)}</span>` : "";
-          return `<span class="ownable-name" data-name="${escapeHtml(m)}">${withIcon(m)}</span>${tag}`;
+          return `<span class="ownable-name" data-name="${escapeHtml(m)}">${withIcon(m)}</span><button type="button" class="copy-name-btn" data-copy="${escapeHtml(m)}" title="複製「${escapeHtml(m)}」文字">📋</button>${tag}`;
         })
         .join(`<span class="op">+</span>`);
       const resultHtml = isFinal
-        ? `<span class="result">${withIcon(name)}</span>`
+        ? `<span class="ownable-name result" data-name="${escapeHtml(name)}">${withIcon(name)}</span>`
         : `<span class="ownable-name" data-name="${escapeHtml(name)}">${withIcon(name)}</span>`;
 
       let tieHtml = "";
@@ -2694,14 +3004,28 @@
     resultBody.querySelectorAll(".ownable-name").forEach((el) => {
       el.addEventListener("click", () => {
         const name = el.dataset.name;
+        stateVersion++;
         if (ownedSet.has(name)) ownedSet.delete(name);
         else ownedSet.add(name);
         reRenderCurrentResult();
       });
     });
+    resultBody.querySelectorAll(".copy-name-btn").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation(); // 避免誤觸發旁邊「已擁有」的切換
+        const name = btn.dataset.copy;
+        const ok = await copyToClipboard(name);
+        const original = btn.textContent;
+        btn.textContent = ok ? "✅" : "✗";
+        setTimeout(() => {
+          btn.textContent = original;
+        }, 1000);
+      });
+    });
     const clearBtn = document.getElementById("clear-owned-btn");
     if (clearBtn) {
       clearBtn.addEventListener("click", () => {
+        stateVersion++;
         ownedSet.clear();
         reRenderCurrentResult();
       });
@@ -2709,6 +3033,7 @@
     const clearRoutesBtn = document.getElementById("clear-routes-btn");
     if (clearRoutesBtn) {
       clearRoutesBtn.addEventListener("click", () => {
+        stateVersion++;
         routeOverrides.clear();
         reRenderCurrentResult();
       });
@@ -2717,6 +3042,7 @@
       sel.addEventListener("change", () => {
         const name = sel.dataset.result;
         const mats = sel.value.split("|");
+        stateVersion++;
         routeOverrides.set(name, mats);
         reRenderCurrentResult();
       });
@@ -2742,22 +3068,7 @@
     routeOverrides.set(target, r.mats);
 
     const stepCount = buildStepList(target, solved).length;
-
-    // 另外檢查這條路線展開後，有沒有任何一個環節是「未知配方」——
-    // 有的話，代表這個步數只是「盡力而為」估出來的，不是真的能從基本元素接起來
-    let fullyResolved = true;
-    const seen = new Set();
-    (function check(name) {
-      if (seen.has(name)) return;
-      seen.add(name);
-      if (isBase(name) || ownedSet.has(name)) return;
-      const choice = getChoice(name, solved);
-      if (!choice) {
-        fullyResolved = false;
-        return;
-      }
-      for (const m of choice.mats) check(m);
-    })(target);
+    const fullyResolved = checkFullyResolved(target, solved);
 
     if (hadOverride) routeOverrides.set(target, prevOverride);
     else routeOverrides.delete(target);
@@ -2841,6 +3152,7 @@
         const idx = Number(el.dataset.idx);
         const r = list[idx];
         if (!r) return;
+        stateVersion++;
         routeOverrides.set(target, r.mats);
         if (!lastResult) {
           // 原本完全查無主要路徑，這裡強制用「盡力而為」的資料集，
@@ -2912,21 +3224,59 @@
     );
   }
 
+  const copyBtn = document.getElementById("copy-btn");
+
+  // 共用的複製到剪貼簿邏輯，優先用 clipboard API，環境不支援（例如非 https、舊瀏覽器）就退回傳統做法
+  async function copyToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (e) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        return true;
+      } catch (e2) {
+        return false;
+      }
+    }
+  }
+
   downloadBtn.addEventListener("click", () => {
     if (!lastResult) return;
     const text = buildPlainText(lastResult.target, lastResult.solved);
     downloadText(`合成路線_${lastResult.target}_${timestampTag()}.txt`, text);
   });
 
+  copyBtn.addEventListener("click", async () => {
+    if (!lastResult) return;
+    const text = buildPlainText(lastResult.target, lastResult.solved);
+    const originalLabel = copyBtn.textContent;
+    const ok = await copyToClipboard(text);
+    copyBtn.textContent = ok ? "已複製！" : "複製失敗";
+    setTimeout(() => {
+      copyBtn.textContent = originalLabel;
+    }, 1500);
+  });
+
   function runSearch() {
     const target = searchInput.value.trim();
     lastResult = null;
     downloadBtn.style.display = "none";
+    copyBtn.style.display = "none";
 
     if (!target) {
       resultBody.innerHTML = `<div class="empty-msg">請輸入想查詢的造物名稱</div>`;
       return;
     }
+
+    addToSearchHistory(target);
 
     if (isBase(target)) {
       resultBody.innerHTML = `<div class="empty-msg">「${escapeHtml(target)}」本身就是基本元素，不需要合成。</div>`;
@@ -2953,6 +3303,7 @@
       optimizeRoute(target, solveBase);
       lastResult = { target, solved: solveBase, opts: null };
       downloadBtn.style.display = "inline-block";
+      copyBtn.style.display = "inline-block";
       renderFlat(target, solveBase, null);
       return;
     }
@@ -2967,6 +3318,7 @@
       };
       lastResult = { target, solved: solveAny, opts };
       downloadBtn.style.display = "inline-block";
+      copyBtn.style.display = "inline-block";
       renderFlat(target, solveAny, opts);
       return;
     }
@@ -2984,6 +3336,7 @@
         .sort((a, b) => b.resolvedCount - a.resolvedCount);
       const chosen = scored[0].r;
 
+      stateVersion++;
       routeOverrides.set(target, chosen.mats);
       const opts = {
         warning:
@@ -2993,11 +3346,19 @@
       };
       lastResult = { target, solved: solveAny, opts };
       downloadBtn.style.display = "inline-block";
+      copyBtn.style.display = "inline-block";
       renderFlat(target, solveAny, opts);
       return;
     }
 
-    // 連一筆已知配方都沒有，才是真的毫無線索
+    // 連一筆已知配方都沒有，才是真的毫無線索——這種情況本來就沒辦法展開路徑走到
+    // autoCollectUnknown，這裡直接把搜尋目標本身收進未知素材清單，方便之後去查
+    if (!unknownCollection.has(target)) {
+      unknownCollection.set(target, "");
+      saveUnknownCollection();
+      renderUnknownCollection();
+    }
+
     const suggestions = allItems
       .filter((n) => n !== target && n.includes(target) && solveAny.cost.has(n))
       .slice(0, 8);
@@ -3044,6 +3405,11 @@
   // （這時候還不套用任何一組，因為 ownedSet 只有在真的載入配方資料之後才有意義）
   loadInventories();
   renderInventorySelect();
+  loadUnknownCollection();
+  loadLowCountSetting();
+  renderUnknownCollection();
+  loadSearchHistory();
+  renderSearchHistory();
 
   // ---------- 自動載入（部署到網站時用）----------
   // 如果跟這個 HTML 檔放在同一個網址下有一個 recipes_data.json，
